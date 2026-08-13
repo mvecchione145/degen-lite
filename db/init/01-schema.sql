@@ -1,0 +1,165 @@
+-- LeaguePicks schema.
+--
+-- Follows docs/database-schema.md. Spread Sharks (wager-based pools) is the
+-- active mode; the legacy pick-based modes remain in the schema and stay
+-- playable, they are simply not offered at pool creation. See docs/mvp.md.
+
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- User accounts
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Pools (leagues)
+CREATE TABLE pools (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    commissioner_id UUID NOT NULL REFERENCES users(id),
+    name VARCHAR(100) NOT NULL,
+    invite_code VARCHAR(10) UNIQUE NOT NULL,
+    pool_type VARCHAR(30) NOT NULL
+        CHECK (pool_type IN ('SPREAD_SHARKS', 'PICKEM', 'CONFIDENCE', 'SURVIVOR')),
+    use_spreads BOOLEAN NOT NULL DEFAULT FALSE,
+    is_public BOOLEAN NOT NULL DEFAULT FALSE,
+    season INT NOT NULL,
+
+    -- Spread Sharks settings. A NULL limit means "no limit" rather than
+    -- carrying a separate on/off flag next to a stale number.
+    starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 10000.00
+        CHECK (starting_balance > 0),
+    max_bet_per_game NUMERIC(14, 2)
+        CHECK (max_bet_per_game IS NULL OR max_bet_per_game >= 1),
+    min_bet NUMERIC(14, 2)
+        CHECK (min_bet IS NULL OR min_bet >= 1),
+    bust_policy VARCHAR(20) NOT NULL DEFAULT 'ELIMINATE'
+        CHECK (bust_policy IN ('ELIMINATE', 'TOPUP', 'REBUY')),
+    stipend_amount NUMERIC(14, 2) CHECK (stipend_amount IS NULL OR stipend_amount > 0),
+    rebuy_limit INT CHECK (rebuy_limit IS NULL OR rebuy_limit >= 0),
+    ends_at TIMESTAMP WITH TIME ZONE,
+
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- Each bust policy needs its own parameter present.
+    CONSTRAINT bust_policy_parameter CHECK (
+        (bust_policy <> 'TOPUP' OR stipend_amount IS NOT NULL)
+        AND (bust_policy <> 'REBUY' OR rebuy_limit IS NOT NULL)
+    )
+);
+
+-- Pool memberships
+CREATE TABLE pool_members (
+    pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id),
+    joined_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    is_eliminated BOOLEAN NOT NULL DEFAULT FALSE,
+    eliminated_week INT,
+    rebuys_used INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (pool_id, user_id)
+);
+
+-- Season schedule and results, shared across every pool.
+--
+-- VOID is a terminal state distinct from FINAL: the game did not officially
+-- conclude under its league's rules, so every bet on it is refunded.
+CREATE TABLE games (
+    id VARCHAR(100) PRIMARY KEY,
+    season INT NOT NULL,
+    week INT NOT NULL,
+    home_team VARCHAR(50) NOT NULL,
+    away_team VARCHAR(50) NOT NULL,
+    kickoff_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- The home team's line: -3.5 means the home team is favoured by 3.5.
+    spread NUMERIC(4, 1) NOT NULL DEFAULT 0.0,
+    -- The over/under. NULL means the total market is not offered on this game.
+    total NUMERIC(4, 1),
+    home_score INT,
+    away_score INT,
+    status VARCHAR(20) NOT NULL DEFAULT 'SCHEDULED'
+        CHECK (status IN ('SCHEDULED', 'IN_PROGRESS', 'FINAL', 'VOID')),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Wagers. The line and price are copied onto the bet at placement so later
+-- line movement, or a change of odds provider, can never rewrite a settled
+-- result. `price` is American odds and is always -110 today.
+CREATE TABLE bets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id),
+    game_id VARCHAR(100) NOT NULL REFERENCES games(id),
+    market VARCHAR(10) NOT NULL CHECK (market IN ('SPREAD', 'TOTAL')),
+    selection VARCHAR(10) NOT NULL
+        CHECK (selection IN ('HOME', 'AWAY', 'OVER', 'UNDER')),
+    line NUMERIC(5, 1) NOT NULL,
+    price INT NOT NULL CHECK (price <= -100 OR price >= 100),
+    stake NUMERIC(14, 2) NOT NULL CHECK (stake >= 1),
+    status VARCHAR(10) NOT NULL DEFAULT 'PENDING'
+        CHECK (status IN ('PENDING', 'WON', 'LOST', 'PUSH', 'VOID')),
+    -- Net result: +profit when won, -stake when lost, 0 on a push or void.
+    net NUMERIC(14, 2),
+    placed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    settled_at TIMESTAMP WITH TIME ZONE,
+
+    CONSTRAINT selection_matches_market CHECK (
+        (market = 'SPREAD' AND selection IN ('HOME', 'AWAY'))
+        OR (market = 'TOTAL' AND selection IN ('OVER', 'UNDER'))
+    )
+);
+
+-- Append-only balance ledger. Balance is the sum of a member's entries, so
+-- history and standings reconcile by construction rather than by discipline.
+-- Nothing here is ever updated or deleted.
+CREATE TABLE ledger_entries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id),
+    bet_id UUID REFERENCES bets(id),
+    entry_type VARCHAR(20) NOT NULL
+        CHECK (entry_type IN ('OPENING', 'STAKE', 'PAYOUT', 'REFUND', 'STIPEND', 'REBUY')),
+    -- Signed: negative for STAKE, positive for everything else.
+    amount NUMERIC(14, 2) NOT NULL,
+    -- Set on STIPEND entries so a week's grant can only happen once.
+    season INT,
+    week INT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- User picks, for the legacy pick-based modes.
+CREATE TABLE picks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id),
+    game_id VARCHAR(100) NOT NULL REFERENCES games(id),
+    selected_team VARCHAR(50) NOT NULL,
+    confidence_rank INT,
+    tiebreaker_points INT,
+    is_correct BOOLEAN,
+    settled_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (pool_id, user_id, game_id)
+);
+
+CREATE INDEX games_season_week_idx ON games (season, week);
+CREATE INDEX games_kickoff_idx ON games (kickoff_time);
+CREATE INDEX games_status_idx ON games (status);
+CREATE INDEX picks_pool_user_idx ON picks (pool_id, user_id);
+CREATE INDEX picks_game_idx ON picks (game_id);
+CREATE INDEX picks_unsettled_idx ON picks (settled_at) WHERE settled_at IS NULL;
+CREATE INDEX pool_members_user_idx ON pool_members (user_id);
+CREATE INDEX pools_invite_code_idx ON pools (invite_code);
+
+-- Backs the per-game exposure check on every placement.
+CREATE INDEX bets_pool_user_game_idx ON bets (pool_id, user_id, game_id);
+CREATE INDEX bets_game_idx ON bets (game_id);
+CREATE INDEX bets_pending_idx ON bets (game_id) WHERE status = 'PENDING';
+CREATE INDEX ledger_pool_user_idx ON ledger_entries (pool_id, user_id);
+
+-- One stipend per member per week, enforced rather than remembered.
+CREATE UNIQUE INDEX ledger_stipend_once_idx
+    ON ledger_entries (pool_id, user_id, season, week)
+    WHERE entry_type = 'STIPEND';

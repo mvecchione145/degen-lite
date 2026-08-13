@@ -1,0 +1,156 @@
+LeaguePicks: Virtual Sports Pool Platform Specification & Planning Document
+This document synthesizes the complete product requirements, system architecture, AWS infrastructure design, cost analysis, and monetization projections for building LeaguePicks, a sports pool platform designed for season-long competition using abstract points.
+1. Executive Summary & Core Concept
+LeaguePicks is a private and public sports pool hosting platform where friends, coworkers, or communities compete over the course of a sports season (e.g., NFL regular season) using abstract, non-monetary points. Instead of placing individual daily wagers against a house, users join Pools (leagues) with custom rule sets. The platform manages game schedules, locks picks at kickoff, fetches automated scores, and maintains live season-long leaderboards.
+Core Game Modes
+Pick’em (Straight Up or Against the Spread): Users select the winner for every game each week. Scoring is based on correct selections (+1 point or spread-weighted).
+Confidence Pool: Users pick winners for every game and assign a unique confidence rank (e.g., 1 to 16 for a 16-game NFL week). Correct picks award the assigned point value.
+Survivor / Elimination Pool: Users select exactly one team to win straight-up each week. Once a team is picked, it cannot be selected again for the rest of the season. An incorrect pick results in elimination or a strike.
+2. External Sports Data & API Strategy
+To operate without high API costs, the system uses two distinct types of data feeds with a cached ingestion strategy:
+Odds & Schedule APIs
+The Odds API: Free tier provides 500 requests/month. Best for pregame lines and schedules.
+SharpAPI: Free tier offers 12 requests/minute (~17,280 requests/day) with a 60-second delay. Ideal for frequent polling during development.
+OddsPapi: Free tier offers 250 requests/month across 350+ global sportsbooks.
+Scores & Settlement APIs
+ESPN Public Hidden Endpoints: Public REST endpoints (e.g., https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard) providing free, real-time score updates without requiring API keys.
+TheSportsDB: Community-driven sports database for schedules and metadata.
+API-Football / API-Sports: 100 free requests/day covering soccer, NBA, NFL, and MLB.
+3. Database Schema Design
+The system relies on a PostgreSQL database schema to track users, pool configurations, game schedules, and user picks.
+-- User Accounts
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Pools (Leagues)
+CREATE TABLE pools (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    commissioner_id UUID REFERENCES users(id),
+    name VARCHAR(100) NOT NULL,
+    invite_code VARCHAR(10) UNIQUE NOT NULL,
+    pool_type VARCHAR(30) NOT NULL, -- PICKEM, CONFIDENCE, SURVIVOR
+    use_spreads BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Pool Memberships
+CREATE TABLE pool_members (
+    pool_id UUID REFERENCES pools(id),
+    user_id UUID REFERENCES users(id),
+    joined_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_eliminated BOOLEAN DEFAULT FALSE,
+    PRIMARY KEY (pool_id, user_id)
+);
+
+-- Season Schedule & Games
+CREATE TABLE games (
+    id VARCHAR(100) PRIMARY KEY,
+    season INT NOT NULL,
+    week INT NOT NULL,
+    home_team VARCHAR(50) NOT NULL,
+    away_team VARCHAR(50) NOT NULL,
+    kickoff_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    spread NUMERIC(4, 1) DEFAULT 0.0,
+    home_score INT DEFAULT NULL,
+    away_score INT DEFAULT NULL,
+    status VARCHAR(20) DEFAULT 'SCHEDULED' -- SCHEDULED, IN_PROGRESS, FINAL
+);
+
+-- User Picks per Week
+CREATE TABLE picks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pool_id UUID REFERENCES pools(id),
+    user_id UUID REFERENCES users(id),
+    game_id VARCHAR(100) REFERENCES games(id),
+    selected_team VARCHAR(50) NOT NULL,
+    confidence_rank INT DEFAULT NULL,
+    tiebreaker_points INT DEFAULT NULL,
+    is_correct BOOLEAN DEFAULT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(pool_id, user_id, game_id)
+);
+
+
+4. AWS Infrastructure Architecture
+The application is built on a serverless container architecture in AWS designed to handle heavy Sunday morning traffic spikes while scaling down during mid-week idle periods.
+Core AWS Components
+Frontend & CDN: Static web client hosted on Amazon S3 and distributed globally via Amazon CloudFront CDN. Domain management via Amazon Route 53.
+Compute Layer: Dockerized backend APIs running on AWS Fargate (Amazon ECS) inside private subnets behind an Application Load Balancer (ALB). Scheduled background jobs are driven by AWS EventBridge.
+Database Layer: Amazon Aurora Serverless v2 (PostgreSQL) in isolated subnets, auto-scaling from 0.5 ACUs to 16+ ACUs based on demand.
+Caching Layer: Amazon ElastiCache for Redis to store live leaderboard calculations and public game odds, reducing direct database reads during game days.
+5. AWS Cost Estimation Matrix
+Cost breakdown across three user growth stages on standard multi-AZ AWS infrastructure:
+AWS Service / Component
+10 Users
+1,000 Users
+100,000 Users
+ 
+Frontend & CDN (S3 + CloudFront)
+< $1.00
+$2.00
+$35.00
+Networking (ALB + NAT Gateway + Route 53)
+$55.00
+$65.00
+$160.00
+Compute (ECS Fargate Tasks)
+$12.00
+$25.00
+$220.00
+Database (Aurora Serverless v2 PostgreSQL)
+$45.00
+$65.00
+$420.00
+Caching (ElastiCache Redis)
+$0.00
+$15.00
+$85.00
+Logs & Operations (CloudWatch + Secrets Manager)
+$5.00
+$10.00
+$40.00
+Data Egress / Transfer Out
+< $1.00
+$5.00
+$90.00
+Estimated Total / Month
+~$118 / mo
+~$187 / mo
+~$1,050 / mo
+
+Note on Dev Costs: The 10-user tier cost of ~$118/mo is driven by fixed AWS baseline infrastructure (NAT Gateway ~$32, ALB ~$18, Aurora minimum 0.5 ACU ~$43). This can be reduced to under $20/month by utilizing public subnets without a NAT Gateway and substituting RDS PostgreSQL db.t4g.micro.
+6. Monetization & Ad Revenue Analysis (100,000 DAU)
+For a sports pool application with 100,000 Daily Active Users (DAU) located primarily in North America, revenue projections across display ad stacks and affiliate channels are modeled below.
+Traffic & Volume Mechanics
+Monthly Active Sessions: 100,000 DAU × 30 days = 3,000,000 monthly sessions.
+Pageviews per Session: Sports users browse multiple screens per visit (submitting picks, checking group leaderboards, viewing live scores). At an average of 4 pageviews per session, total volume equals 12,000,000 pageviews/month.
+Ad Revenue Benchmarks
+Scenario
+Ad Network / Strategy
+Avg Page RPM
+Est. Monthly Revenue
+Est. Annual Revenue
+ 
+Conservative / Low
+Standard Google AdSense (2 PV/session)
+$4 – $8
+$24,000 – $48,000
+$288,000 – $576,000
+Realistic Baseline
+Managed Header Bidding (Playwire / Raptive) (4 PV/session)
+$15 – $25
+$180,000 – $300,000
+$2,160,000 – $3,600,000
+Optimized Stack
+Header Bidding + Sticky Video + Direct Sponsors (5+ PV/session)
+$25 – $35+
+$375,000 – $525,000+
+$4,500,000 – $6,300,000+
+
+Additional Monetization Channels
+Sportsbook Affiliate Deals: Integrating affiliate banners/links (e.g., DraftKings, FanDuel) yields $100–$300 Cost Per Acquisition (CPA) per depositing user.
+Sponsored Pools: Allowing local or national brands to sponsor specific pools or leagues in exchange for logo placement and custom prize distribution.

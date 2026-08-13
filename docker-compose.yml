@@ -1,0 +1,109 @@
+name: leaguepicks
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-leaguepicks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leaguepicks}
+      POSTGRES_DB: ${POSTGRES_DB:-leaguepicks}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leaguepicks} -d ${POSTGRES_DB:-leaguepicks}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    # Append-only persistence on a named volume. Cached odds survive a restart,
+    # which matters on SharpAPI's 12 requests/minute free tier: without it every
+    # `docker compose up` would spend rate limit re-fetching lines it already had.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --dir
+      - /data
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: ./api
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-leaguepicks}:${POSTGRES_PASSWORD:-leaguepicks}@db:5432/${POSTGRES_DB:-leaguepicks}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      LEADERBOARD_TTL_SECONDS: ${LEADERBOARD_TTL_SECONDS:-30}
+      DEV_TOOLS: ${DEV_TOOLS:-true}
+      LEGACY_POOL_MODES: ${LEGACY_POOL_MODES:-false}
+      SHARP_API_KEY: ${SHARP_API_KEY:-}
+      SHARP_API_BASE: ${SHARP_API_BASE:-https://api.sharpapi.io/api/v1}
+      SHARP_LEAGUE: ${SHARP_LEAGUE:-nfl}
+      SHARP_BOOKS: ${SHARP_BOOKS:-draftkings,fanduel}
+      SHARP_REQUESTS_PER_MINUTE: ${SHARP_REQUESTS_PER_MINUTE:-12}
+      SHARP_CACHE_TTL_SECONDS: ${SHARP_CACHE_TTL_SECONDS:-90}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  worker:
+    build: ./api
+    command: ["node", "src/worker.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-leaguepicks}:${POSTGRES_PASSWORD:-leaguepicks}@db:5432/${POSTGRES_DB:-leaguepicks}
+      REDIS_URL: redis://redis:6379
+      SETTLEMENT_CRON: ${SETTLEMENT_CRON:-*/1 * * * *}
+      INGEST_CRON: ${INGEST_CRON:-*/10 * * * *}
+      INGEST_ENABLED: ${INGEST_ENABLED:-false}
+      INGEST_SEASON: ${INGEST_SEASON:-}
+      # Injected by `op run` — see scripts/compose.sh and .env.op.
+      SHARP_API_KEY: ${SHARP_API_KEY:-}
+      SHARP_API_BASE: ${SHARP_API_BASE:-https://api.sharpapi.io/api/v1}
+      SHARP_LEAGUE: ${SHARP_LEAGUE:-nfl}
+      SHARP_BOOKS: ${SHARP_BOOKS:-draftkings,fanduel}
+      SHARP_REQUESTS_PER_MINUTE: ${SHARP_REQUESTS_PER_MINUTE:-12}
+      SHARP_CACHE_TTL_SECONDS: ${SHARP_CACHE_TTL_SECONDS:-90}
+      ODDS_CRON: ${ODDS_CRON:-*/5 * * * *}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build: ./web
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  pgdata:
+  redisdata:

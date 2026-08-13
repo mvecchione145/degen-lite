@@ -1,0 +1,23 @@
+{
+  "name": "leaguepicks-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LeaguePicks MVP API",
+  "scripts": {
+    "start": "node src/server.js",
+    "worker": "node src/worker.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^3.0.3",
+    "pg": "^8.13.1",
+    "redis": "^4.7.0",
+    "zod": "^3.24.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
