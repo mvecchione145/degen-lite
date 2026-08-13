@@ -1,8 +1,8 @@
-// Lines and prices.
+// Line and price presentation.
 //
-// Lines are synthetic today — generated with the demo season — but a sportsbook
-// odds API is the intended source. Everything that needs a line reads it through
-// here, and every bet copies the line onto itself at placement, so swapping the
+// Lines themselves come from the demo seed or, when a key is configured, from
+// SharpAPI via services/sharp.js. This module owns how a line is priced and
+// described. Every bet copies its line and price at placement, so swapping the
 // provider can never disturb settled history.
 
 // Every market is priced -110. While that is true the price is code, not data,

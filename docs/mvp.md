@@ -56,15 +56,17 @@ api/src/
   services/
     bets.js        placement, board, history, rebuy
     ledger.js      balances derived from the entry log
-    lines.js       line/price provider seam, payout preview
+    lines.js       pricing and presentation of a line
+    sharp.js       SharpAPI client: rate limiting, caching, line mapping
     settlement.js  grading, voids, stipends, bust, legacy picks
     leaderboard.js balance and legacy standings
     pools.js       creation, joining, membership guards
     picks.js       legacy pick validation
-    games.js       schedule queries       ingest.js   ESPN score/odds ingestion
+    games.js       schedule queries
+    ingest.js      ESPN schedule/scores, and applying SharpAPI lines to games
 db/init/           01-schema, 02-functions, 03-seed  (run once, on an empty volume)
 web/public/        index.html, app.js, styles.css
-scripts/           smoke-test.mjs
+scripts/           compose.sh (op-wrapped docker compose), smoke-test.mjs
 ```
 
 ## Money handling
@@ -195,7 +197,9 @@ unchanged, and rejected on a Spread Sharks pool.
 | `POST` | `/admin/settle` | Run settlement immediately |
 | `POST` | `/admin/simulate` | `{season?, week?, home_score?, away_score?}` — finalize a week, then settle |
 | `POST` | `/admin/abandon` | `{game_id}` — mark a game as never having concluded, voiding its bets |
-| `POST` | `/admin/ingest` | `{season?}` — pull from ESPN, then settle |
+| `POST` | `/admin/odds` | `{league?}` — pull current lines from SharpAPI onto unstarted games |
+| `GET` | `/admin/odds/account` | What the configured key is entitled to (never reveals the key) |
+| `POST` | `/admin/ingest` | `{season?, force?}` — pull from ESPN, then settle. 409s on a seeded volume |
 | `POST` | `/admin/flush-cache` | Drop every cached leaderboard |
 
 `/admin/simulate` invents results so the full place → lock → settle → leaderboard
@@ -211,11 +215,51 @@ has no such concept. Set `DEV_TOOLS=false` and the whole router disappears.
 | --- | --- | --- |
 | `DEV_TOOLS` | `true` | Exposes `/api/admin/*` |
 | `LEGACY_POOL_MODES` | `false` | Offers Pick'em / Confidence / Survivor at creation |
-| `LEADERBOARD_TTL_SECONDS` | `30` | Redis cache lifetime |
-| `INGEST_ENABLED` | `false` | Pull real NFL lines and scores from ESPN |
+| `LEADERBOARD_TTL_SECONDS` | `30` | Leaderboard cache lifetime |
+| `INGEST_ENABLED` | `false` | Pull the real NFL schedule and scores from ESPN |
+| `SHARP_API_KEY` | — | SharpAPI key; injected from 1Password, never stored |
+| `SHARP_CACHE_TTL_SECONDS` | `90` | Odds cache lifetime |
 | `SETTLEMENT_CRON` | `*/1 * * * *` | Worker settlement schedule |
+| `ODDS_CRON` | `*/5 * * * *` | Worker line-refresh schedule |
 
 Full list in [`.env.example`](../.env.example).
+
+## Secrets
+
+`SHARP_API_KEY` is resolved from 1Password at run time rather than stored:
+
+```bash
+./scripts/compose.sh up -d      # op run --env-file=.env.op -- docker compose
+```
+
+[`.env.op`](../.env.op) holds the reference `op://Private/Sharp API/password` —
+a pointer, not a credential, so it is safe to commit. `op run` injects the
+resolved value into docker compose's environment, where compose interpolates it
+into the `api` and `worker` services. Nothing lands on disk, and `op run`
+conceals the value in child-process output (`compose config` prints
+`<concealed by 1Password>`).
+
+The wrapper degrades rather than failing: with no `op` binary, or no signed-in
+account, it falls back to plain `docker compose` and the stack runs on synthetic
+lines.
+
+## Odds and caching
+
+SharpAPI supplies spreads and totals; ESPN supplies the schedule and scores.
+The split is forced by the data — SharpAPI's free tier has no scores and no week
+numbers. When a SharpAPI key is present it owns the line columns, and the ESPN
+ingester stops updating them, or the two feeds overwrite each other on
+alternating cron ticks.
+
+Redis runs with append-only persistence on a named volume (`redisdata`). On a 12
+requests/minute allowance, a cache that emptied on every restart would spend the
+budget re-fetching lines it already had. Each pagination page is cached
+independently under `sharp:v1:<path>?<query>` for 90 seconds — just above the
+free tier's own 60-second data delay, since polling faster returns the same
+numbers at the cost of rate limit. Requests are additionally spaced in-process to
+stay under the per-minute allowance.
+
+A full NFL refresh costs 4 requests (two markets, two pages each).
 
 ## Deviations from the specification
 
@@ -243,9 +287,12 @@ Behavioural notes:
 
 - **NFL only.** `games` has no sport column. The void rule is written per-sport so
   other leagues drop in cleanly, but only the NFL is wired up.
-- **Lines are synthetic.** They are generated with the demo season and read
-  through `services/lines.js`. ESPN ingestion supplies real spreads and totals
-  when enabled, but a dedicated sportsbook odds feed is the intended source.
+- **Lines are synthetic by default, real when a key is present.** The demo season
+  generates its own; SharpAPI replaces them when `SHARP_API_KEY` is configured.
+- **ESPN and the demo seed cannot share a season.** Both land in the same
+  `season` with overlapping week numbers, so ingestion refuses to run on a volume
+  holding seeded games rather than producing a board that mixes synthetic and
+  real fixtures.
 - **Every price is −110.** The payout arithmetic is written for any American
   price, so varying prices are a pricing change rather than a rewrite.
 - **Survivor is single-elimination** in the legacy mode; strikes are not

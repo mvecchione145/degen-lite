@@ -5,13 +5,13 @@ feeds behind a cached ingestion strategy. Application code never calls a provide
 directly on a user request — scheduled jobs ingest into the database and cache,
 and requests read from there.
 
-> **Lines are now load-bearing.** Under Spread Sharks a game without a spread and
-> a total has no markets to offer, so the odds feed is not a nicety on top of the
-> schedule — it is what makes a game playable. The MVP therefore ships with
-> **synthetic lines** generated alongside the demo season, read through the
-> provider seam in `api/src/services/lines.js`, so nothing depends on a live feed
-> until one is wired in. Every bet copies its line and price at placement, which
-> is what lets the provider change without disturbing settled history.
+> **Lines are load-bearing.** Under Spread Sharks a game without a spread and a
+> total has no markets to offer, so the odds feed is not a nicety on top of the
+> schedule — it is what makes a game playable. The demo still ships with
+> **synthetic lines** so nothing depends on a live feed, and **SharpAPI** supplies
+> real lines when a key is configured. Every bet copies its line and price at
+> placement, which is what lets the provider change without disturbing settled
+> history.
 
 ## Odds & Schedule Providers
 
@@ -20,9 +20,62 @@ polled infrequently.
 
 | Provider | Free tier | Notes |
 | --- | --- | --- |
-| **The Odds API** | 500 requests/month | Best for pregame lines and schedules |
-| **SharpAPI** | 12 requests/minute (~17,280/day), 60-second delay | Ideal for frequent polling during development |
+| **SharpAPI** | 12 requests/minute, 2 books, 60-second delay | **Wired up.** Supplies spreads and totals |
+| **The Odds API** | 500 requests/month | Alternate for pregame lines and schedules |
 | **OddsPapi** | 250 requests/month | Covers 350+ global sportsbooks |
+
+### SharpAPI (implemented)
+
+> **Name collision worth knowing about.** The odds provider is
+> **sharpapi.io**. There is an unrelated product at **sharpapi.com** — an
+> AI workflow API for e-commerce and HR — with a near-identical name and
+> overlapping documentation domains. They are different companies. Searching for
+> "SharpAPI docs" lands on either one.
+
+Base URL `https://api.sharpapi.io/api/v1`, authenticated with an `X-API-Key`
+header. Confirmed against a live free-tier key:
+
+| Capability | Free tier |
+| --- | --- |
+| Features | `odds`, `schedule` — **no scores** |
+| Rate limit | 12 requests/minute |
+| Sportsbooks | 2 (DraftKings, FanDuel) |
+| Delay | 60 seconds |
+| Page size | 200 rows maximum (larger values are clamped, with a warning) |
+
+Endpoints used:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /odds?league=&market=` | Current lines. Markets are `point_spread` and `total_points` |
+| `GET /account` | Confirms the key and reports tier limits |
+
+**SharpAPI cannot be the schedule of record.** Its events carry no scores and no
+week number, only a start time. Settlement needs final scores, and pools are
+organised by week, so:
+
+- **ESPN** stays authoritative for season, week, status, and final scores.
+- **SharpAPI** prices the games ESPN already provided.
+
+When a SharpAPI key is configured it owns the line columns outright, and the
+ESPN ingester stops updating `spread` and `total` on existing rows. Without that
+the two feeds overwrite each other on alternating cron ticks and a game's spread
+visibly flaps.
+
+#### Mapping to our schema
+
+Two details in the response are easy to get wrong:
+
+- **The line is relative to the selection, not the home team.** An away row
+  quoting `+3.5` is a home line of `-3.5`. `games.spread` is always the home
+  line, so away rows are negated.
+- **`is_main_line` is unreliable** — the API returns `false` on rows that are
+  plainly the main line. Filtering strictly on it returns nothing. It is used as
+  a preference, falling back to the line the book quotes most often.
+
+Games are matched to events on normalised team names plus a kickoff within two
+days. The date check matters: the same fixture recurs across a season, so names
+alone are ambiguous.
 
 ## Scores & Settlement Providers
 
@@ -78,9 +131,32 @@ Jobs are driven by AWS EventBridge schedules; results land in PostgreSQL, with
 hot read paths (live odds, leaderboards) served from Redis. See
 [Architecture](architecture.md).
 
+## Caching
+
+Upstream responses are cached in Redis, which runs with append-only persistence
+on a named Docker volume. That persistence is not incidental: on a 12
+requests/minute allowance, a cache that emptied on every restart would spend the
+budget re-fetching lines it already had.
+
+| Cache | TTL | Key |
+| --- | --- | --- |
+| SharpAPI responses | 90s (`SHARP_CACHE_TTL_SECONDS`) | `sharp:v1:<path>?<query>` |
+| Leaderboards | 30s | `lb:<pool_id>` |
+
+The TTL is set just above the free tier's own 60-second delay — polling faster
+than the data updates returns the same numbers at the cost of rate limit. Each
+pagination page is cached independently.
+
+Requests are additionally spaced in-process to stay under the per-minute
+allowance, so a burst cannot trip a 429.
+
 ## Budget Implications
 
 The free tiers are workable because request volume scales with *games*, not with
 *users*. A season's schedule, lines, and scores cost the same number of upstream
 calls whether the platform has 10 users or 100,000. Growth pressure lands on
 compute and database (see [Cost Estimates](cost-estimates.md)), not on data.
+
+One NFL line refresh costs 4 requests (two markets, two pages each), so the
+default five-minute cadence uses roughly 48 requests an hour against an
+allowance of 720.

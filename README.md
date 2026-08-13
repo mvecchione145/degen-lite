@@ -101,17 +101,49 @@ they remain in the codebase and existing pools keep working. To offer them again
 LEGACY_POOL_MODES=true docker compose up -d api web
 ```
 
-## Live sports data
+## Live odds from SharpAPI
 
-Lines are synthetic by default so the demo needs no network access. Ingestion
-from ESPN's public endpoints supplies real spreads, totals, and scores:
+Lines are synthetic by default so the demo needs no network access or API key.
+Real spreads and totals come from [SharpAPI](https://sharpapi.io), with the key
+injected from 1Password at run time — it is never written to disk:
 
 ```bash
-INGEST_ENABLED=true INGEST_SEASON=2025 docker compose up -d worker
+./scripts/compose.sh up -d
 ```
 
-Ingested games are namespaced with an `espn:` id prefix and never collide with
-seeded fixtures. See [docs/data-sources.md](docs/data-sources.md).
+That wrapper is `op run --env-file=.env.op -- docker compose`, resolving the
+reference in [`.env.op`](.env.op):
+
+```
+SHARP_API_KEY=op://Private/Sharp API/password
+```
+
+`.env.op` holds pointers only, no secret material, so it is safe to commit. If
+the 1Password CLI is missing or not signed in, the wrapper falls back to plain
+`docker compose` and the stack still starts on synthetic lines.
+
+Once running, the worker refreshes lines every five minutes. To trigger one
+immediately, or to check what the key is entitled to:
+
+```bash
+curl -X POST -H "authorization: Bearer $TOKEN" localhost:3000/api/admin/odds
+curl -H "authorization: Bearer $TOKEN" localhost:3000/api/admin/odds/account
+```
+
+**SharpAPI supplies lines, not scores** — its free tier has no score data and no
+week numbers, so ESPN remains the source for the schedule and final results.
+Enable that separately:
+
+```bash
+INGEST_ENABLED=true INGEST_SEASON=2026 ./scripts/compose.sh up -d worker
+```
+
+ESPN ingestion refuses to run on a volume that still holds the seeded demo
+season, since real and synthetic fixtures would collide on the same week
+numbers. Start from `docker compose down -v` for live data. Ingested games are
+namespaced with an `espn:` id prefix.
+
+See [docs/data-sources.md](docs/data-sources.md) for the full provider split.
 
 ## Documentation
 
