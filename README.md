@@ -73,6 +73,7 @@ cache.
 | `worker` | — | Scheduled settlement and optional score ingestion |
 | `db` | 5433 | PostgreSQL 16 |
 | `redis` | 6380 | Leaderboard cache |
+| `redis-ui` | 5540 | RedisInsight — browse the cache at http://localhost:5540 |
 
 Host ports are configurable in `.env` — see [`.env.example`](.env.example).
 Postgres and Redis are mapped to non-default host ports (5433/6380) so they do
