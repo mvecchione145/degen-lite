@@ -41,6 +41,27 @@ services:
       timeout: 5s
       retries: 20
 
+  redis-ui:
+    image: redis/redisinsight:latest
+    # Browser UI for the cache: browse keys, watch TTLs tick down on the
+    # leaderboard entries, run commands. The RI_REDIS_* vars pre-register the
+    # `redis` service as a connection, so it opens straight onto the data.
+    environment:
+      RI_APP_PORT: 5540
+      RI_REDIS_HOST: redis
+      RI_REDIS_PORT: 6379
+      RI_REDIS_ALIAS: leaguepicks
+      # Without this RedisInsight drops the pre-registered connection and waits
+      # on the terms screen, so the UI would open empty.
+      RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
+    volumes:
+      - redisinsight:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${REDIS_UI_PORT:-5540}:5540"
+
   api:
     build: ./api
     environment:
@@ -107,3 +128,4 @@ services:
 volumes:
   pgdata:
   redisdata:
+  redisinsight:
