@@ -434,6 +434,50 @@ function marketButton(game, market, selection, board) {
     </button>`;
 }
 
+// Everything about the slip that depends on what has been typed into the stake
+// field. Kept separate from betSlip so keystrokes never re-render the <input>
+// itself — replacing it would drop focus and reset the caret to the far left.
+function slipStakeState(game, board) {
+  const stake = Number(state.slipStake);
+  const valid = state.slipStake !== '' && Number.isFinite(stake)
+    && stake >= board.balance.minimum_bet;
+  const allowance = game.remaining_allowance;
+  return {
+    stake,
+    valid,
+    allowance,
+    profit: valid ? previewProfit(stake, board.price) : 0,
+    overAllowance: valid && allowance !== null && stake > allowance,
+    overBalance: valid && stake > board.balance.balance,
+  };
+}
+
+function slipPayout(game, board) {
+  const { stake, valid, profit } = slipStakeState(game, board);
+  return `
+    <span class="label">To win</span>
+    <strong>${valid ? fmtMoney(profit) : '—'}</strong>
+    <span class="muted small">returns ${valid ? fmtMoney(stake + profit) : '—'}</span>`;
+}
+
+function slipFoot(game, board) {
+  const {
+    stake, valid, profit, allowance, overAllowance, overBalance,
+  } = slipStakeState(game, board);
+  return `
+    ${overBalance ? '<p class="error">That is more than your balance.</p>' : ''}
+    ${overAllowance ? `<p class="error">Only ${fmtMoney(allowance)} left under this pool's per-game cap.</p>` : ''}
+    <button class="primary slip-confirm" data-slip-confirm
+            ${!valid || overBalance || overAllowance ? 'disabled' : ''}>
+      ${valid
+    ? `Confirm — risk ${fmtMoney(stake)} to win ${fmtMoney(profit)}`
+    : `Enter a stake of at least ${fmtMoney(board.balance.minimum_bet)}`}
+    </button>
+    <p class="muted small" style="margin:8px 0 0">
+      A placed bet cannot be cancelled or edited.
+    </p>`;
+}
+
 function betSlip(game, board) {
   const { market, selection } = state.slip;
   const line = market === 'SPREAD'
@@ -442,14 +486,6 @@ function betSlip(game, board) {
   const label = market === 'SPREAD'
     ? `${selection === 'HOME' ? game.home_team : game.away_team} ${fmtLine(line)}`
     : `${selection === 'OVER' ? 'Over' : 'Under'} ${game.total}`;
-
-  const stake = Number(state.slipStake);
-  const valid = Number.isFinite(stake) && stake >= board.balance.minimum_bet;
-  const profit = valid ? previewProfit(stake, board.price) : 0;
-
-  const allowance = game.remaining_allowance;
-  const overAllowance = valid && allowance !== null && stake > allowance;
-  const overBalance = valid && stake > board.balance.balance;
 
   return `
     <div class="slip">
@@ -463,27 +499,13 @@ function betSlip(game, board) {
       <div class="slip-body">
         <div>
           <label for="slip-stake">Stake</label>
-          <input id="slip-stake" type="number" step="0.01"
+          <input id="slip-stake" type="number" step="1" inputmode="numeric"
                  min="${board.balance.minimum_bet}" value="${esc(state.slipStake)}"
                  placeholder="${fmtMoney(board.balance.minimum_bet)}" autofocus />
         </div>
-        <div class="slip-payout">
-          <span class="label">To win</span>
-          <strong>${valid ? fmtMoney(profit) : '—'}</strong>
-          <span class="muted small">returns ${valid ? fmtMoney(stake + profit) : '—'}</span>
-        </div>
+        <div class="slip-payout" id="slip-payout">${slipPayout(game, board)}</div>
       </div>
-      ${overBalance ? '<p class="error">That is more than your balance.</p>' : ''}
-      ${overAllowance ? `<p class="error">Only ${fmtMoney(allowance)} left under this pool's per-game cap.</p>` : ''}
-      <button class="primary slip-confirm" data-slip-confirm
-              ${!valid || overBalance || overAllowance ? 'disabled' : ''}>
-        ${valid
-    ? `Confirm — risk ${fmtMoney(stake)} to win ${fmtMoney(profit)}`
-    : `Enter a stake of at least ${fmtMoney(board.balance.minimum_bet)}`}
-      </button>
-      <p class="muted small" style="margin:8px 0 0">
-        A placed bet cannot be cancelled or edited.
-      </p>
+      <div id="slip-foot">${slipFoot(game, board)}</div>
     </div>`;
 }
 
@@ -669,17 +691,19 @@ async function renderSharksPool(detail, week) {
     const stakeInput = app.querySelector('#slip-stake');
     stakeInput?.addEventListener('input', (event) => {
       state.slipStake = event.target.value;
-      // Repaint only the slip so the input keeps focus and the caret position.
+      // Repaint only the parts that depend on the stake. The <input> itself is
+      // left alone, so focus and the caret stay exactly where the user put them
+      // (number inputs don't support selectionStart, so it can't be restored).
       const game = board.games.find((g) => g.id === state.slip.gameId);
-      const slipEl = app.querySelector('.slip');
-      const caret = event.target.selectionStart;
-      slipEl.outerHTML = betSlip(game, board);
-      wireBoard();
-      const fresh = app.querySelector('#slip-stake');
-      fresh.focus();
-      fresh.setSelectionRange(caret, caret);
+      app.querySelector('#slip-payout').innerHTML = slipPayout(game, board);
+      app.querySelector('#slip-foot').innerHTML = slipFoot(game, board);
+      wireConfirm();
     });
 
+    wireConfirm();
+  }
+
+  function wireConfirm() {
     app.querySelector('[data-slip-confirm]')?.addEventListener('click', async (event) => {
       event.target.disabled = true;
       try {
