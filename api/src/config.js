@@ -1,4 +1,7 @@
 function num(value, fallback) {
+  // An unset compose variable arrives as '', and Number('') is 0 — which is
+  // finite, so a naive check silently yields 0 instead of the fallback.
+  if (value === undefined || value === null || value === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -6,6 +9,15 @@ function num(value, fallback) {
 function bool(value, fallback) {
   if (value === undefined || value === '') return fallback;
   return value === 'true' || value === '1';
+}
+
+// An NFL season kicks off in September and runs into the following January, so
+// anything before March still belongs to the previous year's season. The
+// bootstrap SQL derives it the same way, so pools and the ingested schedule
+// agree on which season they are talking about.
+export function currentNflSeason(now = new Date()) {
+  const year = now.getFullYear();
+  return now.getMonth() >= 2 ? year : year - 1;
 }
 
 export const config = {
@@ -26,8 +38,10 @@ export const config = {
   legacyPoolModes: bool(process.env.LEGACY_POOL_MODES, false),
   settlementCron: process.env.SETTLEMENT_CRON || '*/1 * * * *',
   ingestCron: process.env.INGEST_CRON || '*/10 * * * *',
-  ingestEnabled: bool(process.env.INGEST_ENABLED, false),
-  ingestSeason: num(process.env.INGEST_SEASON, new Date().getFullYear()),
+  // There is no synthetic fallback any more: without ingestion the app has no
+  // games at all, so this is on by default.
+  ingestEnabled: bool(process.env.INGEST_ENABLED, true),
+  ingestSeason: num(process.env.INGEST_SEASON, currentNflSeason()),
 
   // SharpAPI (sharpapi.io) supplies lines. Note this is a different product
   // from sharpapi.com, which is an unrelated AI workflow API.

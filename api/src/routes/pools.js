@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, badRequest } from '../http.js';
 import { requireAuth } from '../auth.js';
-import { config } from '../config.js';
+import { config, currentNflSeason } from '../config.js';
 import {
   createPool,
   joinPoolByCode,
@@ -86,11 +86,10 @@ router.post('/', asyncHandler(async (req, res) => {
     );
   }
 
+  // Fall back to the current season rather than failing: a pool can legitimately
+  // be created before the worker has finished pulling the schedule.
   const seasons = await listSeasons();
-  const season = body.season ?? seasons[0];
-  if (!season) {
-    throw badRequest('No seasons are loaded yet, so a pool cannot be created');
-  }
+  const season = body.season ?? seasons[0] ?? currentNflSeason();
 
   if (body.pool_type === 'SURVIVOR' && body.use_spreads) {
     throw badRequest('Survivor pools are always straight up');

@@ -102,7 +102,7 @@ services:
       REDIS_URL: redis://redis:6379
       SETTLEMENT_CRON: ${SETTLEMENT_CRON:-*/1 * * * *}
       INGEST_CRON: ${INGEST_CRON:-*/10 * * * *}
-      INGEST_ENABLED: ${INGEST_ENABLED:-false}
+      INGEST_ENABLED: ${INGEST_ENABLED:-true}
       INGEST_SEASON: ${INGEST_SEASON:-}
       # Injected by `op run` — see scripts/compose.sh and .env.op.
       SHARP_API_KEY: ${SHARP_API_KEY:-}

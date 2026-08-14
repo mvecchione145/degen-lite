@@ -65,14 +65,25 @@ async function request(path, params = {}) {
         signal: AbortSignal.timeout(15_000),
       });
 
-      if (response.status === 429) {
-        throw new SharpError('rate limited by SharpAPI (429)');
-      }
-      if (response.status === 401 || response.status === 403) {
-        throw new SharpError(`SharpAPI rejected the key (${response.status})`);
-      }
       if (!response.ok) {
-        throw new SharpError(`SharpAPI responded ${response.status} for ${path}`);
+        // Include the upstream message: SharpAPI explains itself in the body,
+        // and a bare status code is not enough to act on.
+        const detail = await response.text().catch(() => '');
+        let message = detail.slice(0, 300);
+        try {
+          message = JSON.parse(detail).error?.message ?? message;
+        } catch {
+          /* not JSON — keep the raw snippet */
+        }
+        if (response.status === 429) {
+          throw new SharpError(`rate limited by SharpAPI: ${message}`);
+        }
+        if (response.status === 401 || response.status === 403) {
+          throw new SharpError(`SharpAPI rejected the key (${response.status}): ${message}`);
+        }
+        throw new SharpError(
+          `SharpAPI responded ${response.status} for ${path}?${url.searchParams} — ${message}`,
+        );
       }
 
       const body = await response.json();
@@ -86,23 +97,42 @@ async function request(path, params = {}) {
   return { body: value, cached };
 }
 
-// Walks the offset pagination, bounded so a wide filter cannot spend the whole
-// rate limit in one refresh.
-async function fetchAll(path, params, { pageSize = 200, maxPages = 5 } = {}) {
+// Upstream caps `limit` at 200 and refuses an `offset` above 500, directing
+// deeper pagination to the opaque cursor. The cursor is the better instrument
+// anyway: it is stable while rows shift between pages on a live feed, where a
+// numeric offset would skip or repeat rows.
+const MAX_OFFSET = 500;
+
+async function fetchAll(path, params, { pageSize = 200, maxPages = 8 } = {}) {
   const rows = [];
+  let cursor = null;
   let offset = 0;
   let cachedPages = 0;
+  let truncated = false;
 
   for (let page = 0; page < maxPages; page += 1) {
-    const { body, cached } = await request(path, { ...params, limit: pageSize, offset });
+    const pageParams = cursor
+      ? { ...params, limit: pageSize, cursor }
+      : { ...params, limit: pageSize, offset };
+
+    const { body, cached } = await request(path, pageParams);
     if (cached) cachedPages += 1;
     rows.push(...(body.data ?? []));
 
     if (!body.pagination?.has_more) break;
-    offset = body.pagination.next_offset ?? offset + pageSize;
+
+    cursor = body.pagination.next_cursor ?? null;
+    if (!cursor) {
+      offset = body.pagination.next_offset ?? offset + pageSize;
+      if (offset > MAX_OFFSET) {
+        truncated = true;
+        break;
+      }
+    }
+    if (page === maxPages - 1) truncated = true;
   }
 
-  return { rows, cachedPages };
+  return { rows, cachedPages, truncated };
 }
 
 /* ----------------------------------------------------------------- mapping */
@@ -219,6 +249,9 @@ export async function fetchLines(league = config.sharp.league) {
     lines,
     fetched: spreads.rows.length + totals.rows.length,
     served_from_cache: spreads.cachedPages + totals.cachedPages,
+    // Surfaced rather than swallowed: a truncated walk means some games simply
+    // never got a line, which would otherwise look like a matching failure.
+    truncated: spreads.truncated || totals.truncated,
   };
 }
 

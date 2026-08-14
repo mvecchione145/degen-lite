@@ -147,6 +147,7 @@ export async function applySharpLines(league = config.sharp.league) {
     events_priced: feed.lines.size,
     rows_fetched: feed.fetched,
     served_from_cache: feed.served_from_cache,
+    truncated: feed.truncated,
     games_considered: games.length,
     updated: 0,
     unmatched: 0,

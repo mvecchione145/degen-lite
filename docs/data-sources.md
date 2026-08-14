@@ -7,11 +7,10 @@ and requests read from there.
 
 > **Lines are load-bearing.** Under Spread Sharks a game without a spread and a
 > total has no markets to offer, so the odds feed is not a nicety on top of the
-> schedule — it is what makes a game playable. The demo still ships with
-> **synthetic lines** so nothing depends on a live feed, and **SharpAPI** supplies
-> real lines when a key is configured. Every bet copies its line and price at
-> placement, which is what lets the provider change without disturbing settled
-> history.
+> schedule — it is what makes a game playable. Nothing is generated locally: the
+> application has no fixtures until ESPN supplies them and no markets until they
+> are priced. Every bet copies its line and price at placement, which is what
+> lets the provider change without disturbing settled history.
 
 ## Odds & Schedule Providers
 
@@ -64,7 +63,7 @@ visibly flaps.
 
 #### Mapping to our schema
 
-Two details in the response are easy to get wrong:
+Three details in the response are easy to get wrong:
 
 - **The line is relative to the selection, not the home team.** An away row
   quoting `+3.5` is a home line of `-3.5`. `games.spread` is always the home
@@ -72,6 +71,13 @@ Two details in the response are easy to get wrong:
 - **`is_main_line` is unreliable** — the API returns `false` on rows that are
   plainly the main line. Filtering strictly on it returns nothing. It is used as
   a preference, falling back to the line the book quotes most often.
+- **Offset pagination stops at 500.** `limit` is capped at 200 and an `offset`
+  above 500 is rejected outright, with the error directing you to the opaque
+  `next_cursor`. A full NFL slate runs past that, so the walk follows the cursor.
+  It is the better instrument regardless: on a live feed rows shift between
+  pages, and a numeric offset would skip or repeat them. A truncated walk is
+  reported rather than swallowed, since it would otherwise look like a matching
+  failure rather than missing data.
 
 Games are matched to events on normalised team names plus a kickoff within two
 days. The date check matters: the same fixture recurs across a season, so names
@@ -107,9 +113,9 @@ sportsbook odds feed is the intended source.
 A wager is voided when its game never officially concludes under its league's
 rules. That determination comes from the feed — a game reported as cancelled,
 postponed indefinitely, or abandoned — and the bar differs per sport, so it is a
-per-sport rule rather than one global one. The synthetic season has no such
-concept, so the MVP exposes an admin action to mark a game abandoned purely so
-the void path is exercisable before a live feed is connected.
+per-sport rule rather than one global one. A cancellation cannot be summoned on
+demand, so the MVP exposes an admin action to mark a game abandoned, purely so
+the void path stays exercisable.
 
 ## Ingestion Strategy
 
@@ -117,8 +123,9 @@ The core cost control is that polling frequency is decoupled from user traffic. 
 Sunday-morning spike of users checking scores produces zero additional upstream
 API calls.
 
-- **Schedules** — ingested once per week, well ahead of the slate. Low volume,
-  fits comfortably in a 500/month budget.
+- **Schedules** — the full regular season is pulled from ESPN on startup and
+  refreshed every ten minutes. 18 requests per pass, and ESPN's endpoints are
+  unmetered. Preseason and postseason are not ingested.
 - **Odds, spreads, and totals** — polled on a schedule leading up to kickoff, then
   frozen. Once a game locks, its line no longer needs refreshing, and wagers
   already placed carry their own copy regardless.
@@ -157,6 +164,8 @@ The free tiers are workable because request volume scales with *games*, not with
 calls whether the platform has 10 users or 100,000. Growth pressure lands on
 compute and database (see [Cost Estimates](cost-estimates.md)), not on data.
 
-One NFL line refresh costs 4 requests (two markets, two pages each), so the
-default five-minute cadence uses roughly 48 requests an hour against an
-allowance of 720.
+One NFL line refresh costs about 8 requests — two markets, roughly four cursor
+pages each — so the default five-minute cadence uses on the order of 96 requests
+an hour against an allowance of 720. Requests are spaced in-process to stay
+under the per-minute ceiling, so a refresh takes tens of seconds rather than
+firing as a burst.

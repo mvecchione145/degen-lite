@@ -11,25 +11,30 @@ working MVP that runs locally on Docker Compose.
 ## Quickstart
 
 ```bash
-docker compose up -d --build
+./scripts/compose.sh up -d --build
 open http://localhost:8080
 ```
 
-Sign in with any demo account — **alice**, **bob**, **carol**, or **dave** —
+Sign in with any bootstrap account — **alice**, **bob**, **carol**, or **dave** —
 password `password123`.
 
-The database seeds itself on first boot with a 5-week season positioned relative
-to the moment you start it:
+**All sports data is real.** On first boot the worker pulls the current NFL
+regular season from ESPN — 272 games across 18 weeks — and prices every one of
+them from [SharpAPI](https://sharpapi.io). Nothing is fabricated: no invented
+fixtures, no invented lines, no pre-placed bets. Give it about a minute, then
+watch it land:
 
-| Weeks | State |
-| --- | --- |
-| 1–2 | Played and settled, so balances and standings have real history immediately |
-| 3 | Kicks off in ~2 days — open for wagering |
-| 4–5 | Further out |
+```bash
+docker compose logs -f worker
+```
 
-The demo pool **Spread Sharks** (invite code `SHARKS01`) has all four members
-with settled bets behind them. One pool of each legacy mode is also seeded —
-`SUNDAY01`, `OFFICE01`, `SURVIVE1` — and remains playable.
+The database bootstraps only what you need to sign in and look at the board:
+four accounts and one open pool, **Spread Sharks** (invite code `SHARKS01`),
+with every member on the starting balance and no wagers behind them.
+
+The wrapper script injects the SharpAPI key from 1Password — see
+[Live odds](#live-odds-from-sharpapi). Plain `docker compose up -d` also works;
+you get the real schedule from ESPN and ESPN's own lines, just not SharpAPI's.
 
 ## How a pool works
 
@@ -52,17 +57,24 @@ Full rules in [docs/game-modes.md](docs/game-modes.md).
 ## Verify it works
 
 ```bash
-docker compose down -v && docker compose up -d   # the test needs a fresh season
+docker compose down -v && ./scripts/compose.sh up -d   # needs a fresh season
 node scripts/smoke-test.mjs
 ```
 
-111 checks covering auth, placement rules, the per-game cap, settlement
-arithmetic to the cent, voids, bust policies, and leaderboard caching.
+113 checks covering auth, placement rules, the per-game cap, settlement
+arithmetic to the cent, voids, bust policies, leaderboard caching, and the live
+odds feed.
 
-To see the full loop without waiting for real kickoffs, open a pool and click
-**Simulate results** (or `POST /api/admin/simulate`). It finalizes the current
-week, settles every wager, applies bust policies, and busts the leaderboard
-cache.
+The season has not been played yet, so settlement is exercised by finalizing a
+week with a chosen scoreline. The test derives that scoreline from the **real**
+spreads on the board — picking a whole-number spread to land exactly on for a
+push, and games either side of it for a win and a loss — so the outcomes are
+exact rather than probabilistic. It consumes three weeks doing so, hence the
+fresh database.
+
+The same tool is available in the UI: open a pool and click **Simulate results**
+(or `POST /api/admin/simulate`) to finalize the current week, settle every wager,
+apply bust policies, and bust the leaderboard cache.
 
 ## Services
 
@@ -89,8 +101,8 @@ docker compose up -d --build         # rebuild after code changes
 psql postgres://leaguepicks:leaguepicks@localhost:5433/leaguepicks
 ```
 
-The seed only runs when the volume is empty, so `down -v` is how you get a fresh
-demo season.
+The bootstrap SQL only runs when the volume is empty, so `down -v` is how you get
+a clean database — the schedule and lines are then re-pulled from the feeds.
 
 ## Legacy game modes
 
@@ -103,8 +115,7 @@ LEGACY_POOL_MODES=true docker compose up -d api web
 
 ## Live odds from SharpAPI
 
-Lines are synthetic by default so the demo needs no network access or API key.
-Real spreads and totals come from [SharpAPI](https://sharpapi.io), with the key
+Spreads and totals come from [SharpAPI](https://sharpapi.io), with the key
 injected from 1Password at run time — it is never written to disk:
 
 ```bash
@@ -120,7 +131,8 @@ SHARP_API_KEY=op://Private/Sharp API/password
 
 `.env.op` holds pointers only, no secret material, so it is safe to commit. If
 the 1Password CLI is missing or not signed in, the wrapper falls back to plain
-`docker compose` and the stack still starts on synthetic lines.
+`docker compose`: the stack still runs on the real ESPN schedule and ESPN's own
+lines, just without SharpAPI pricing.
 
 Once running, the worker refreshes lines every five minutes. To trigger one
 immediately, or to check what the key is entitled to:
@@ -130,20 +142,32 @@ curl -X POST -H "authorization: Bearer $TOKEN" localhost:3000/api/admin/odds
 curl -H "authorization: Bearer $TOKEN" localhost:3000/api/admin/odds/account
 ```
 
-**SharpAPI supplies lines, not scores** — its free tier has no score data and no
-week numbers, so ESPN remains the source for the schedule and final results.
-Enable that separately:
+**SharpAPI supplies lines, not scores.** Its free tier has no score data and no
+week numbers, so the two feeds split the job:
+
+| Feed | Provides | Schedule |
+| --- | --- | --- |
+| **ESPN** | Schedule, week numbers, status, final scores | every 10 min (`INGEST_CRON`) |
+| **SharpAPI** | Spreads and totals | every 5 min (`ODDS_CRON`) |
+
+Both are on by default. When a SharpAPI key is present it owns the line columns
+outright and ESPN stops updating them — otherwise the two feeds overwrite each
+other on alternating ticks and a spread visibly flaps. Ingested games carry an
+`espn:` id prefix.
+
+To pin a different season:
 
 ```bash
-INGEST_ENABLED=true INGEST_SEASON=2026 ./scripts/compose.sh up -d worker
+INGEST_SEASON=2025 ./scripts/compose.sh up -d worker
 ```
 
-ESPN ingestion refuses to run on a volume that still holds the seeded demo
-season, since real and synthetic fixtures would collide on the same week
-numbers. Start from `docker compose down -v` for live data. Ingested games are
-namespaced with an `espn:` id prefix.
-
 See [docs/data-sources.md](docs/data-sources.md) for the full provider split.
+
+### The season may not have started
+
+Until kickoff week arrives there are no final scores, so nothing settles and
+every balance sits at its opening figure. That is correct, not a fault. Use
+**Simulate results** to exercise settlement before the season is under way.
 
 ## Documentation
 

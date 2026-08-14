@@ -82,3 +82,6 @@ Full detail in [Game Modes](game-modes.md).
   shape (see [Architecture](architecture.md)).
 - **Cheap data.** Lines, totals, and scores are sourced through free tiers and
   public endpoints with aggressive caching (see [Data Sources](data-sources.md)).
+- **Real data only.** No fixtures, lines, or results are generated locally. The
+  schedule comes from ESPN and the markets from SharpAPI, so a game exists only
+  once a feed has reported it and is playable only once it has been priced.

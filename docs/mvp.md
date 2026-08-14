@@ -8,6 +8,10 @@ for the quickstart.
 
 ## What works
 
+Every fixture, line, and score is real: the schedule comes from ESPN and the
+spreads and totals from SharpAPI. The database bootstraps four accounts and one
+empty pool, and generates no sports data at all.
+
 - **Accounts** — register, sign in, JWT-authenticated requests
 - **Pools** — create a Spread Sharks pool with its full settings, private or
   public, join by invite code, browse public pools
@@ -64,7 +68,8 @@ api/src/
     picks.js       legacy pick validation
     games.js       schedule queries
     ingest.js      ESPN schedule/scores, and applying SharpAPI lines to games
-db/init/           01-schema, 02-functions, 03-seed  (run once, on an empty volume)
+db/init/           01-schema, 02-functions, 03-seed  (run once, on an empty volume;
+                   03-seed creates accounts and one pool — no sports data)
 web/public/        index.html, app.js, styles.css
 scripts/           compose.sh (op-wrapped docker compose), smoke-test.mjs
 ```
@@ -91,7 +96,7 @@ that the ledger could not cover.
 ### Grading
 
 `grade_bet()` and `bet_profit()` in `db/init/02-functions.sql` are the single
-source of truth, used by both settlement and the seed. Profit at −110 is
+source of truth for grading. Profit at −110 is
 `stake × 100 / 110` rounded to the cent — Postgres `ROUND` on NUMERIC rounds half
 away from zero, which is the rule the story specifies.
 
@@ -199,15 +204,18 @@ unchanged, and rejected on a Spread Sharks pool.
 | `POST` | `/admin/abandon` | `{game_id}` — mark a game as never having concluded, voiding its bets |
 | `POST` | `/admin/odds` | `{league?}` — pull current lines from SharpAPI onto unstarted games |
 | `GET` | `/admin/odds/account` | What the configured key is entitled to (never reveals the key) |
-| `POST` | `/admin/ingest` | `{season?, force?}` — pull from ESPN, then settle. 409s on a seeded volume |
+| `POST` | `/admin/ingest` | `{season?, force?}` — pull from ESPN, then settle. 409s if the season holds locally-created fixtures |
 | `POST` | `/admin/flush-cache` | Drop every cached leaderboard |
 
-`/admin/simulate` invents results so the full place → lock → settle → leaderboard
-loop is demoable in seconds. Passing explicit scores makes settlement
-deterministic, which is what lets the smoke test assert exact push and payout
-outcomes rather than probabilistic ones. `/admin/abandon` exists because real
-void detection needs a feed reporting a cancellation, and the synthetic season
-has no such concept. Set `DEV_TOOLS=false` and the whole router disappears.
+`/admin/simulate` writes results onto real fixtures, so the full place → lock →
+settle → leaderboard loop is demoable in seconds instead of waiting weeks for
+kickoff. Passing explicit scores makes settlement deterministic, which is what
+lets the smoke test assert exact push and payout outcomes. `/admin/abandon`
+exists because real void detection needs a feed reporting a cancellation, which
+cannot be summoned on demand.
+
+Both fabricate results on real games, so `DEV_TOOLS=false` — which removes the
+whole router — matters more here than it did against generated fixtures.
 
 ## Configuration
 
@@ -240,8 +248,8 @@ conceals the value in child-process output (`compose config` prints
 `<concealed by 1Password>`).
 
 The wrapper degrades rather than failing: with no `op` binary, or no signed-in
-account, it falls back to plain `docker compose` and the stack runs on synthetic
-lines.
+account, it falls back to plain `docker compose` — the stack still runs on the
+real ESPN schedule and ESPN's own lines, just without SharpAPI pricing.
 
 ## Odds and caching
 
@@ -287,12 +295,14 @@ Behavioural notes:
 
 - **NFL only.** `games` has no sport column. The void rule is written per-sport so
   other leagues drop in cleanly, but only the NFL is wired up.
-- **Lines are synthetic by default, real when a key is present.** The demo season
-  generates its own; SharpAPI replaces them when `SHARP_API_KEY` is configured.
-- **ESPN and the demo seed cannot share a season.** Both land in the same
-  `season` with overlapping week numbers, so ingestion refuses to run on a volume
-  holding seeded games rather than producing a board that mixes synthetic and
-  real fixtures.
+- **No sports data is generated.** Fixtures, weeks, and scores come from ESPN;
+  spreads and totals from SharpAPI. The bootstrap SQL creates four accounts and
+  one empty pool and nothing else.
+- **Preseason is not ingested.** ESPN is queried for the regular season only, so
+  between February and September the board holds only future fixtures.
+- **Ingestion refuses to run over locally-created fixtures.** If a season already
+  holds games that did not come from a feed, ingesting would mix them on the same
+  week numbers, so it returns 409 instead.
 - **Every price is −110.** The payout arithmetic is written for any American
   price, so varying prices are a pricing change rather than a rewrite.
 - **Survivor is single-elimination** in the legacy mode; strikes are not
@@ -329,7 +339,7 @@ This runs locally. Before it runs anywhere else:
 
 ## Verification
 
-`node scripts/smoke-test.mjs` runs **111 checks** against a live stack:
+`node scripts/smoke-test.mjs` runs **113 checks** against a live stack:
 
 - auth and its rejection paths
 - pool creation with every setting, and the legacy-mode flag
@@ -344,8 +354,18 @@ This runs locally. Before it runs anywhere else:
 - voids refunding stakes in full
 - bust detection, rebuy limits, weekly stipends, and elimination
 - ledger entries summing to the reported balance
+- the live odds feed: key accepted, pagination not truncated, repeat refresh
+  served from the persistent cache
 
-The settlement assertions are exact because `/admin/simulate` accepts a
-scoreline. The test finalizes weeks 3, 4, and 5 with chosen scores, so it needs a
-freshly seeded database — reset with `docker compose down -v && docker compose up -d`
-before each run.
+The settlement assertions are exact even though the season has not been played.
+`/admin/simulate` accepts a scoreline, and the test derives one from the **real**
+spreads on the board: it finds a whole-number spread to land exactly on for a
+push, then bets games either side of it for a guaranteed win and loss. Since one
+scoreline applies to a whole week, this yields all three outcomes from a single
+simulate.
+
+It consumes three weeks, so reset first:
+
+```bash
+docker compose down -v && ./scripts/compose.sh up -d
+```

@@ -98,9 +98,11 @@ async function main() {
       : '[worker] odds disabled (no SHARP_API_KEY — lines stay as seeded)',
   );
 
-  await settle('startup');
+  // Order matters on a first boot: pull the schedule, price it, then settle
+  // anything already final. Reversing it would settle against an empty table.
   await ingest('startup');
   await refreshOdds('startup');
+  await settle('startup');
 
   cron.schedule(config.settlementCron, () => settle('cron'));
   if (config.ingestEnabled) {

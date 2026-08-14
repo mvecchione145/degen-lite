@@ -2,7 +2,7 @@ import { query } from '../db.js';
 
 export async function listGames(season, week) {
   const { rows } = await query(
-    `SELECT id, season, week, home_team, away_team, kickoff_time, spread,
+    `SELECT id, season, week, home_team, away_team, kickoff_time, spread, total,
             home_score, away_score, status,
             (kickoff_time <= CURRENT_TIMESTAMP) AS locked
        FROM games
