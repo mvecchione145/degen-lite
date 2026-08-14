@@ -6,7 +6,8 @@
   "description": "LeaguePicks MVP API",
   "scripts": {
     "start": "node src/server.js",
-    "worker": "node src/worker.js"
+    "worker": "node src/worker.js",
+    "test": "node --test"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

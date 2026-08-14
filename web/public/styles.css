@@ -244,8 +244,9 @@ label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px
 .pool-card { display: block; color: inherit; }
 .pool-card:hover { text-decoration: none; border-color: #3c4353; }
 
-.week-nav { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+.week-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
 .week-nav button[aria-current="true"] { border-color: var(--accent); color: var(--accent); }
+.week-nav .week-shift { padding: 8px 12px; line-height: 1; color: var(--muted); }
 
 .game {
   border: 1px solid var(--border);

@@ -21,6 +21,7 @@ from automated scores, and keeps balances and standings in step.
 | [Architecture](architecture.md) | AWS serverless container architecture |
 | [Cost Estimates](cost-estimates.md) | Monthly AWS cost matrix at 10 / 1,000 / 100,000 users |
 | [Monetization](monetization.md) | Ad revenue modeling and affiliate channels |
+| [College Football](NCAAF.md) | Scope for adding NCAAF: what it costs, what breaks first |
 | [Input: user story](inputs/user-story.md) | The source note behind Spread Sharks, with the decisions taken |
 
 ## Status
@@ -32,5 +33,9 @@ and [Database Schema](database-schema.md) have been reconciled with it.
 [Architecture](architecture.md), [Cost Estimates](cost-estimates.md), and
 [Monetization](monetization.md) remain forward-looking plans — all figures there
 are estimates, and none of that infrastructure is deployed.
+
+[College Football](NCAAF.md) is a scoping document for work not yet started. Its
+findings about the current NFL code are verified against the live feeds; its
+plan is a proposal.
 
 Original source material: [`../context.txt`](../context.txt).

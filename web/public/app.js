@@ -14,6 +14,9 @@ const state = {
   // Legacy pick pools only: gameId -> { selected_team, confidence_rank }
   draft: new Map(),
   tiebreaker: '',
+  // Visible slice of the week selector: { key, start }. Re-centres on the open
+  // week whenever `key` changes; the arrows move `start` on their own.
+  weekNav: { key: null, start: 0 },
 };
 
 const app = document.getElementById('app');
@@ -650,6 +653,61 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
     </p>`;
 }
 
+/* --------------------------------------------------------------- week nav */
+
+// Weeks shown either side of the open week before the arrows are needed.
+const WEEK_NAV_RADIUS = 3;
+const WEEK_NAV_SIZE = WEEK_NAV_RADIUS * 2 + 1;
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+// Resolves (and re-centres, when the open week changed) the visible slice.
+function weekWindow(weeks, week, poolId) {
+  const max = Math.max(0, weeks.length - WEEK_NAV_SIZE);
+  const key = `${poolId}:${week}`;
+  if (state.weekNav.key !== key) {
+    const selected = Math.max(0, weeks.findIndex((w) => w.week === week));
+    state.weekNav = { key, start: clamp(selected - WEEK_NAV_RADIUS, 0, max) };
+  }
+  const start = clamp(state.weekNav.start, 0, max);
+  state.weekNav.start = start;
+  return { start, end: start + WEEK_NAV_SIZE, atStart: start === 0, atEnd: start === max };
+}
+
+function weekNav(weeks, week, poolId) {
+  const { start, end, atStart, atEnd } = weekWindow(weeks, week, poolId);
+  return `
+    <div class="week-nav">
+      <button class="week-shift" data-week-shift="-1" aria-label="Earlier weeks"
+              ${atStart ? 'disabled' : ''}>‹</button>
+      ${weeks.slice(start, end).map((w) => `
+        <button data-week="${w.week}" aria-current="${w.week === week}">
+          W${w.week}${w.final_count === w.game_count ? ' ✓' : ''}
+        </button>`).join('')}
+      <button class="week-shift" data-week-shift="1" aria-label="Later weeks"
+              ${atEnd ? 'disabled' : ''}>›</button>
+    </div>`;
+}
+
+// Arrows only slide the window, so they repaint the nav in place instead of
+// re-rendering the whole pool view.
+function wireWeekNav(weeks, week, poolId, onSelect) {
+  const host = app.querySelector('[data-week-nav]');
+  if (!host) return;
+
+  host.querySelectorAll('[data-week]').forEach((btn) => {
+    btn.addEventListener('click', () => onSelect(Number(btn.dataset.week)));
+  });
+
+  host.querySelectorAll('[data-week-shift]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.weekNav.start += Number(btn.dataset.weekShift);
+      host.innerHTML = weekNav(weeks, week, poolId);
+      wireWeekNav(weeks, week, poolId, onSelect);
+    });
+  });
+}
+
 async function renderSharksPool(detail, week) {
   const poolId = detail.pool.id;
   const [board, history, leaderboard] = await Promise.all([
@@ -773,12 +831,7 @@ async function renderSharksPool(detail, week) {
     ? '<button data-action="simulate" title="Development only: fabricate final scores for this week">Simulate results</button>'
     : ''}
       </div>
-      <div class="week-nav">
-        ${detail.weeks.map((w) => `
-          <button data-week="${w.week}" aria-current="${w.week === week}">
-            W${w.week}${w.final_count === w.game_count ? ' ✓' : ''}
-          </button>`).join('')}
-      </div>
+      <div data-week-nav>${weekNav(detail.weeks, week, poolId)}</div>
       <div id="board"></div>
     </div>
 
@@ -806,11 +859,9 @@ async function renderSharksPool(detail, week) {
     });
   });
 
-  app.querySelectorAll('[data-week]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.slip = null;
-      location.hash = `#/pools/${poolId}/${btn.dataset.week}`;
-    });
+  wireWeekNav(detail.weeks, week, poolId, (selected) => {
+    state.slip = null;
+    location.hash = `#/pools/${poolId}/${selected}`;
   });
 
   app.querySelector('[data-action="rebuy"]')?.addEventListener('click', async (event) => {
@@ -1070,12 +1121,7 @@ async function renderPickPool(detail, week) {
         <h2 style="margin:0">Week ${week} picks</h2>
         ${state.devTools ? '<button data-action="simulate">Simulate results</button>' : ''}
       </div>
-      <div class="week-nav">
-        ${detail.weeks.map((w) => `
-          <button data-week="${w.week}" aria-current="${w.week === week}">
-            W${w.week}${w.final_count === w.game_count ? ' ✓' : ''}
-          </button>`).join('')}
-      </div>
+      <div data-week-nav>${weekNav(detail.weeks, week, poolId)}</div>
       <div id="games"></div>
       ${openGames.length > 0 && !detail.membership?.isEliminated ? `
         <div class="sticky-save">
@@ -1090,10 +1136,8 @@ async function renderPickPool(detail, week) {
 
   paint();
 
-  app.querySelectorAll('[data-week]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      location.hash = `#/pools/${poolId}/${btn.dataset.week}`;
-    });
+  wireWeekNav(detail.weeks, week, poolId, (selected) => {
+    location.hash = `#/pools/${poolId}/${selected}`;
   });
 
   app.querySelector('[data-action="simulate"]')?.addEventListener('click', async (event) => {

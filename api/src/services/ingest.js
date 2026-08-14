@@ -15,9 +15,17 @@ const STATUS_BY_STATE = { pre: 'SCHEDULED', in: 'IN_PROGRESS', post: 'FINAL' };
 // ESPN reports odds as a details string ("KC -3.5") plus a signed spread. Only
 // the string says who is favoured, so resolve against the home abbreviation and
 // normalise to our convention: spread is always the home team's line.
-function homeSpread(odds, homeAbbrev) {
+//
+// The abbreviation class is deliberately wider than the letters the NFL uses.
+// College abbreviations carry punctuation — `TA&M` (Texas A&M), `M-OH` (Miami
+// (OH)), `W&M` — and a letters-only pattern fails to match them, which lands in
+// the `return 0` below and posts a 39.5-point favourite as a pick'em. A wrong
+// line is worse than no line, so this errs towards parsing.
+// Exported for api/test/ingest.test.js — the parsing rules here are the only
+// thing standing between a malformed odds string and a fabricated line.
+export function homeSpread(odds, homeAbbrev) {
   if (!odds || typeof odds.details !== 'string') return 0;
-  const match = odds.details.match(/^([A-Z]{2,4})\s+([+-]?\d+(?:\.\d+)?)$/);
+  const match = odds.details.match(/^([A-Z0-9&.'-]{2,6})\s+([+-]?\d+(?:\.\d+)?)$/);
   if (!match) return 0;
   const [, abbrev, value] = match;
   const line = Number(value);
