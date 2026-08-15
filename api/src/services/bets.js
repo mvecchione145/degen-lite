@@ -91,20 +91,34 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
     const stakeText = stake.toFixed(2);
 
     // Every comparison happens in exact NUMERIC, not JS floating point.
-    // The cap is per wager, not per game: nothing is summed across the bets a
-    // member already has on this fixture, so they may back it repeatedly as
-    // long as each stake is within the limit and the balance covers it.
+    //
+    // The cap is the most a member may have riding on one selection — one side
+    // of one market on one game, "New England -3.5". So it sums what they
+    // already hold on that exact selection rather than looking at this stake
+    // alone: splitting a wager into five pieces must not buy five times the
+    // limit. Backing a different side, a different market, or a different game
+    // each gets its own allowance.
+    //
+    // VOID bets are excluded because a voided stake is refunded — it is no
+    // longer at risk and must not consume the allowance.
     const { rows: [check] } = await client.query(
       `WITH bal AS (
           SELECT COALESCE(SUM(amount), 0) AS balance
             FROM ledger_entries WHERE pool_id = $1 AND user_id = $2
+       ), exposure AS (
+          SELECT COALESCE(SUM(stake), 0) AS staked
+            FROM bets
+           WHERE pool_id = $1 AND user_id = $2 AND game_id = $3
+             AND market = $4 AND selection = $5
+             AND status <> 'VOID'
        )
-       SELECT bal.balance,
-              bal.balance >= $3::NUMERIC AS can_afford,
-              ($4::NUMERIC IS NULL OR $3::NUMERIC <= $4::NUMERIC) AS within_cap,
-              $3::NUMERIC >= $5::NUMERIC AS meets_minimum
-         FROM bal`,
-      [poolId, userId, stakeText, pool.max_bet, minimum],
+       SELECT bal.balance, exposure.staked,
+              bal.balance >= $6::NUMERIC AS can_afford,
+              ($7::NUMERIC IS NULL
+               OR exposure.staked + $6::NUMERIC <= $7::NUMERIC) AS within_cap,
+              $6::NUMERIC >= $8::NUMERIC AS meets_minimum
+         FROM bal, exposure`,
+      [poolId, userId, gameId, market, selection, stakeText, pool.max_bet, minimum],
     );
 
     if (!check.meets_minimum) {
@@ -116,8 +130,13 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
       );
     }
     if (!check.within_cap) {
+      const cap = Number(pool.max_bet);
+      const staked = Number(check.staked);
       throw badRequest(
-        `This pool caps a single bet at ${Number(pool.max_bet).toFixed(2)}`,
+        staked > 0
+          ? `This pool caps one selection at ${cap.toFixed(2)}. You already have `
+            + `${staked.toFixed(2)} on this one, so ${(cap - staked).toFixed(2)} is left.`
+          : `This pool caps one selection at ${cap.toFixed(2)}`,
       );
     }
 

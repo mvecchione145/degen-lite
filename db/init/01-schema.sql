@@ -38,9 +38,10 @@ CREATE TABLE pools (
     -- carrying a separate on/off flag next to a stale number.
     starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 20000.00
         CHECK (starting_balance > 0),
-    -- The most that can be risked on a single wager. Deliberately per bet and
-    -- not per game: a member may back the same game as many times as their
-    -- balance allows, they just cannot do it in one oversized swing.
+    -- The most a member may have riding on one selection — one side of one
+    -- market on one game. Enforced against the sum of their bets on that
+    -- selection, so splitting a wager into pieces cannot buy extra allowance.
+    -- A different side, market or game each gets its own.
     max_bet NUMERIC(14, 2)
         CHECK (max_bet IS NULL OR max_bet >= 1),
     min_bet NUMERIC(14, 2)

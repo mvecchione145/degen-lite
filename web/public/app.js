@@ -291,15 +291,16 @@ async function renderPools() {
           </div>
           <div class="field field-inline">
             <input id="cap-on" name="cap_on" type="checkbox" checked />
-            <label for="cap-on" style="margin:0">Cap the size of a single bet</label>
+            <label for="cap-on" style="margin:0">Cap the stake on one selection</label>
           </div>
           <div class="field" id="cap-field">
-            <label for="max-bet">Maximum per bet</label>
+            <label for="max-bet">Maximum per selection</label>
             <input id="max-bet" name="max_bet" type="number"
                    min="1" step="1" value="5500" />
             <p class="muted small" style="margin:6px 0 0">
-              Applies to each wager on its own. Members can back the same game
-              more than once.
+              The total a member can have on one side of one game — every bet
+              on NE −3.5 counts together. Other sides, markets and games each
+              get their own allowance.
             </p>
           </div>
           <div class="field">
@@ -450,19 +451,35 @@ function marketButton(game, market, selection, board) {
 // Everything about the slip that depends on what has been typed into the stake
 // field. Kept separate from betSlip so keystrokes never re-render the <input>
 // itself — replacing it would drop focus and reset the caret to the far left.
+// What this member already has riding on one selection — one side of one
+// market on one game. The cap applies to the total, so a stake is checked
+// against what is left rather than against the cap outright. Mirrors the
+// exposure CTE in placeBet, including the exclusion of refunded VOID bets.
+function stakedOnSelection(game, market, selection) {
+  return (game.my_bets ?? [])
+    .filter((bet) => bet.market === market
+      && bet.selection === selection
+      && bet.status !== 'VOID')
+    .reduce((sum, bet) => sum + Number(bet.stake), 0);
+}
+
 function slipStakeState(game, board) {
   const stake = Number(state.slipStake);
   const valid = state.slipStake !== '' && Number.isFinite(stake)
     && stake >= board.balance.minimum_bet;
+
   const maxBet = board.balance.max_bet;
+  const staked = stakedOnSelection(game, state.slip.market, state.slip.selection);
+  const remaining = maxBet === null ? null : Math.max(0, maxBet - staked);
+
   return {
     stake,
     valid,
     maxBet,
+    staked,
+    remaining,
     profit: valid ? previewProfit(stake, board.price) : 0,
-    // Per wager, not per game — nothing already staked on this fixture counts
-    // against it.
-    overMax: valid && maxBet !== null && stake > maxBet,
+    overMax: valid && remaining !== null && stake > remaining,
     overBalance: valid && stake > board.balance.balance,
   };
 }
@@ -477,11 +494,13 @@ function slipPayout(game, board) {
 
 function slipFoot(game, board) {
   const {
-    stake, valid, profit, maxBet, overMax, overBalance,
+    stake, valid, profit, maxBet, staked, remaining, overMax, overBalance,
   } = slipStakeState(game, board);
   return `
     ${overBalance ? '<p class="error">That is more than your balance.</p>' : ''}
-    ${overMax ? `<p class="error">This pool caps a single bet at ${fmtMoney(maxBet)}.</p>` : ''}
+    ${overMax ? `<p class="error">${staked > 0
+    ? `You already have ${fmtMoney(staked)} on this selection — ${fmtMoney(remaining)} left under the ${fmtMoney(maxBet)} cap.`
+    : `This pool caps one selection at ${fmtMoney(maxBet)}.`}</p>` : ''}
     <button class="primary slip-confirm" data-slip-confirm
             ${!valid || overBalance || overMax ? 'disabled' : ''}>
       ${valid
@@ -879,7 +898,7 @@ async function renderSharksPool(detail, week) {
         ${detail.members.length} members ·
         commissioner ${esc(pool.commissioner_username)}
         ${pool.max_bet !== null
-    ? ` · max ${fmtMoney(pool.max_bet)} per bet` : ' · no bet limit'}
+    ? ` · max ${fmtMoney(pool.max_bet)} per selection` : ' · no bet limit'}
         ${pool.ends_at ? ` · ends ${new Date(pool.ends_at).toLocaleDateString()}` : ''}</span>
     </div>
 

@@ -63,7 +63,7 @@ CREATE TABLE pools (
     season INT NOT NULL,
 
     starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 20000.00,
-    max_bet NUMERIC(14, 2),                       -- per wager; NULL = uncapped
+    max_bet NUMERIC(14, 2),                       -- per selection; NULL = uncapped
     min_bet NUMERIC(14, 2),                       -- NULL = the 1.00 floor only
     bust_policy VARCHAR(20) NOT NULL DEFAULT 'ELIMINATE'
         CHECK (bust_policy IN ('ELIMINATE', 'TOPUP', 'REBUY')),

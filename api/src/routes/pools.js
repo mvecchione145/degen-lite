@@ -55,7 +55,7 @@ const createSchema = z.object({
 
   // Wager settings. A null limit means no limit.
   starting_balance: money(1).optional().default(20000),
-  // The ceiling on a single wager. Null means no ceiling.
+  // The ceiling on total stake per selection. Null means no ceiling.
   max_bet: money(1).nullish().default(5500),
   min_bet: money(1).nullish().default(null),
   bust_policy: z.enum(['ELIMINATE', 'TOPUP', 'REBUY']).optional().default('ELIMINATE'),

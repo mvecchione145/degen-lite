@@ -100,7 +100,7 @@ never did on identical results.
 | Setting | Default |
 | --- | --- |
 | Starting balance | 20,000 |
-| Max bet | 5,500 — caps *a single wager*, and can be switched off. Nothing limits how many bets a member places on one game, only the size of each |
+| Max bet | 5,500 — caps *total stake on one selection*, summed across every bet on that side, and can be switched off. Backing a different side, market or game gets a fresh allowance |
 | Minimum bet | Off (the 1.00 floor still applies) |
 | Bust policy | Eliminate |
 | Stipend amount | None — required only for the top-up policy |
