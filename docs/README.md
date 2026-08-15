@@ -19,7 +19,7 @@ from automated scores, and keeps balances and standings in step.
 | [Data Sources](data-sources.md) | Lines, totals, and score feeds, plus the ingestion strategy |
 | [Database Schema](database-schema.md) | PostgreSQL tables, the balance ledger, and relationships |
 | [Architecture](architecture.md) | AWS serverless container architecture |
-| [Deploy to EC2](deploy-ec2.md) | The cheap path: one instance, docker compose, ~$17/mo |
+| [Deploy to EC2](deploy-ec2.md) | The cheap path: one instance, docker compose, ~$17/mo. Terraform for it lives in [`terraform/`](../terraform/) |
 | [Cost Estimates](cost-estimates.md) | Monthly AWS cost matrix at 10 / 1,000 / 100,000 users |
 | [Monetization](monetization.md) | Ad revenue modeling and affiliate channels |
 | [College Football](NCAAF.md) | Running NCAAF alongside the NFL: what was built, and what the live key changed |

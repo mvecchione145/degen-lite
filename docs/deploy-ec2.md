@@ -77,6 +77,18 @@ should be absent entirely.
 
 ### 1. Launch the instance
 
+**With Terraform** (`terraform/`), which does everything in this step and the
+next, and gives you a shell over Session Manager instead of SSH:
+
+```bash
+cd terraform && terraform init && terraform apply
+aws ssm start-session --target $(terraform output -raw instance_id)
+```
+
+See `terraform/README.md`, then skip to step 3.
+
+**By hand**, if you would rather click:
+
 - **AMI**: Amazon Linux 2023, **arm64**
 - **Type**: `t4g.small`
 - **Storage**: 20 GB gp3
