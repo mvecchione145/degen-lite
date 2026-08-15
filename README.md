@@ -15,8 +15,8 @@ working MVP that runs locally on Docker Compose.
 open http://localhost:8080
 ```
 
-Sign in with any bootstrap account — **alice**, **bob**, **carol**, or **dave** —
-password `password123`.
+Sign in with the bootstrap account — **admin** — password `password123`, or
+create your own from the same screen.
 
 **All sports data is real.** On first boot the worker pulls the current NFL
 regular season from ESPN — 272 games across 18 weeks — and prices every one of

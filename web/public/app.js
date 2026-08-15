@@ -146,8 +146,7 @@ function renderAuth() {
         <p class="error" id="auth-error" hidden></p>
       </form>
       <p class="muted small" style="margin-bottom:0">
-        Demo accounts: <span class="code">alice</span>, <span class="code">bob</span>,
-        <span class="code">carol</span>, <span class="code">dave</span> —
+        Demo account: <span class="code">admin</span> —
         password <span class="code">password123</span>
       </p>
     </div>`;
