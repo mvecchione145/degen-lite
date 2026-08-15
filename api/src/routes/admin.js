@@ -8,6 +8,7 @@ import { abandonGame, runSettlement } from '../services/settlement.js';
 import { applySharpLines, ingestSeason } from '../services/ingest.js';
 import { fetchAccount } from '../services/sharp.js';
 import { getCurrentWeek, listSeasons } from '../services/games.js';
+import { DEFAULT_LEAGUE, LEAGUE_IDS } from '../leagues.js';
 import { cacheDel, leaderboardKey } from '../cache.js';
 
 // Local development conveniences. Gated behind DEV_TOOLS because
@@ -16,6 +17,7 @@ const router = Router();
 router.use(requireAuth);
 
 const simulateSchema = z.object({
+  league: z.enum(LEAGUE_IDS).optional().default(DEFAULT_LEAGUE),
   season: z.coerce.number().int().min(1900).max(2200).optional(),
   week: z.coerce.number().int().min(1).max(30).optional(),
   // Explicit scores make settlement deterministic, which is what lets the
@@ -33,9 +35,9 @@ router.post('/settle', asyncHandler(async (req, res) => {
 // survivor eliminations can be demoed without waiting for real kickoffs.
 router.post('/simulate', asyncHandler(async (req, res) => {
   const body = simulateSchema.parse(req.body ?? {});
-  const season = body.season ?? (await listSeasons())[0];
+  const season = body.season ?? (await listSeasons(body.league))[0];
   if (!season) throw badRequest('No seasons are loaded');
-  const week = body.week ?? (await getCurrentWeek(season));
+  const week = body.week ?? (await getCurrentWeek(body.league, season));
   if (!week) throw badRequest('No week to simulate');
 
   const explicit = body.home_score !== undefined && body.away_score !== undefined;
@@ -47,9 +49,10 @@ router.post('/simulate', asyncHandler(async (req, res) => {
             status = 'FINAL',
             kickoff_time = LEAST(kickoff_time, CURRENT_TIMESTAMP - INTERVAL '3 hours'),
             updated_at = CURRENT_TIMESTAMP
-      WHERE season = $1 AND week = $2 AND status NOT IN ('FINAL', 'VOID')
+      WHERE league = $5 AND season = $1 AND week = $2
+        AND status NOT IN ('FINAL', 'VOID')
       RETURNING id`,
-    [season, week, body.home_score ?? null, body.away_score ?? null],
+    [season, week, body.home_score ?? null, body.away_score ?? null, body.league],
   );
 
   // A random tie would push every bet and pick on that game; nudge one score
@@ -91,8 +94,10 @@ router.post('/odds', asyncHandler(async (req, res) => {
       + 'inject it from 1Password.',
     );
   }
-  const league = z.string().min(2).max(40).optional()
-    .parse(req.body?.league || undefined) ?? config.sharp.league;
+  // Our league id ('NFL' / 'NCAAF'), not SharpAPI's slug — the mapping between
+  // the two lives in leagues.js.
+  const league = z.enum(LEAGUE_IDS).optional().default(DEFAULT_LEAGUE)
+    .parse(req.body?.league || undefined);
 
   res.json(await applySharpLines(league));
 }));
@@ -105,12 +110,15 @@ router.get('/odds/account', asyncHandler(async (req, res) => {
 
 router.post('/ingest', asyncHandler(async (req, res) => {
   const body = z.object({
+    league: z.enum(LEAGUE_IDS).optional().default(DEFAULT_LEAGUE),
     season: z.coerce.number().int().min(1900).max(2200).optional(),
     force: z.boolean().optional(),
   }).parse(req.body ?? {});
 
   const season = body.season ?? config.ingestSeason;
-  const result = await ingestSeason(season, { force: body.force ?? false });
+  const result = await ingestSeason(season, {
+    league: body.league, force: body.force ?? false,
+  });
   if (result.skipped) return res.status(409).json(result);
 
   const settlement = await runSettlement();

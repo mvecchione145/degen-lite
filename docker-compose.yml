@@ -73,6 +73,7 @@ services:
       LEADERBOARD_TTL_SECONDS: ${LEADERBOARD_TTL_SECONDS:-30}
       DEV_TOOLS: ${DEV_TOOLS:-true}
       LEGACY_POOL_MODES: ${LEGACY_POOL_MODES:-false}
+      INGEST_LEAGUES: ${INGEST_LEAGUES:-NFL}
       SHARP_API_KEY: ${SHARP_API_KEY:-}
       SHARP_API_BASE: ${SHARP_API_BASE:-https://api.sharpapi.io/api/v1}
       SHARP_LEAGUE: ${SHARP_LEAGUE:-nfl}
@@ -104,6 +105,9 @@ services:
       INGEST_CRON: ${INGEST_CRON:-*/10 * * * *}
       INGEST_ENABLED: ${INGEST_ENABLED:-true}
       INGEST_SEASON: ${INGEST_SEASON:-}
+      # Comma-separated: NFL, NCAAF, or both. Each league is a full walk of
+      # ESPN's scoreboard per tick — college is 17 slates of up to 99 games.
+      INGEST_LEAGUES: ${INGEST_LEAGUES:-NFL}
       # Injected by `op run` — see scripts/compose.sh and .env.op.
       SHARP_API_KEY: ${SHARP_API_KEY:-}
       SHARP_API_BASE: ${SHARP_API_BASE:-https://api.sharpapi.io/api/v1}

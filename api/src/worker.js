@@ -3,7 +3,8 @@ import { config, sharpEnabled } from './config.js';
 import { closeDatabase, waitForDatabase } from './db.js';
 import { closeCache, initCache } from './cache.js';
 import { runSettlement } from './services/settlement.js';
-import { applySharpLines, ingestSeason } from './services/ingest.js';
+import { applySharpLines, ingestConfiguredLeagues } from './services/ingest.js';
+import { LEAGUES } from './leagues.js';
 
 // Stands in for the EventBridge-driven scheduled tasks in docs/architecture.md.
 // Same image as the API, different entrypoint — mirroring one ECS task
@@ -40,17 +41,21 @@ async function ingest(trigger) {
   if (!config.ingestEnabled || ingesting) return;
   ingesting = true;
   try {
-    const result = await ingestSeason(config.ingestSeason);
-    if (result.skipped) {
-      console.warn(`[worker] ingest skipped: ${result.skipped}`);
-      return;
+    const runs = await ingestConfiguredLeagues(config.ingestSeason);
+    let upserted = 0;
+    for (const result of runs) {
+      if (result.skipped) {
+        console.warn(`[worker] ingest skipped (${result.league}): ${result.skipped}`);
+        continue;
+      }
+      upserted += result.games_upserted;
+      console.log(
+        `[worker] ingest (${trigger}, ${result.league}): `
+        + `${result.games_upserted} games across ${result.weeks_ingested} weeks`
+        + (result.errors.length ? `, ${result.errors.length} week(s) failed` : ''),
+      );
     }
-    console.log(
-      `[worker] ingest (${trigger}): ${result.games_upserted} games across `
-      + `${result.weeks_ingested} weeks`
-      + (result.errors.length ? `, ${result.errors.length} week(s) failed` : ''),
-    );
-    if (result.games_upserted > 0) await settle('post-ingest');
+    if (upserted > 0) await settle('post-ingest');
   } catch (err) {
     console.error('[worker] ingest failed:', err.message);
   } finally {
@@ -65,14 +70,21 @@ async function refreshOdds(trigger) {
   if (!sharpEnabled() || pricing) return;
   pricing = true;
   try {
-    const result = await applySharpLines();
-    if (result.skipped) return;
-    console.log(
-      `[worker] odds (${trigger}): priced ${result.events_priced} events, `
-      + `updated ${result.updated} of ${result.games_considered} open games`
-      + (result.unmatched ? `, ${result.unmatched} unmatched` : '')
-      + (result.served_from_cache ? ` (${result.served_from_cache} page(s) from cache)` : ''),
-    );
+    for (const league of config.ingestLeagues) {
+      const result = await applySharpLines(league);
+      if (result.skipped) {
+        console.log(`[worker] odds (${trigger}, ${league}): ${result.skipped}`);
+        continue;
+      }
+      console.log(
+        `[worker] odds (${trigger}, ${result.league}): `
+        + `priced ${result.events_priced} events, updated ${result.updated} `
+        + `of ${result.games_considered} open games`
+        + (result.unmatched ? `, ${result.unmatched} unmatched` : '')
+        + (result.truncated ? ', FEED TRUNCATED' : '')
+        + (result.served_from_cache ? ` (${result.served_from_cache} page(s) from cache)` : ''),
+      );
+    }
   } catch (err) {
     // A line feed outage must not stop settlement — existing lines simply stand.
     console.error('[worker] odds refresh failed:', err.message);
@@ -88,13 +100,15 @@ async function main() {
   console.log(`[worker] settlement cron: ${config.settlementCron}`);
   console.log(
     config.ingestEnabled
-      ? `[worker] ingest cron: ${config.ingestCron} (season ${config.ingestSeason})`
+      ? `[worker] ingest cron: ${config.ingestCron} `
+        + `(season ${config.ingestSeason}, leagues ${config.ingestLeagues.join('+')})`
       : '[worker] ingest disabled (set INGEST_ENABLED=true to pull live scores)',
   );
   console.log(
     sharpEnabled()
       ? `[worker] odds cron: ${config.oddsCron} `
-        + `(SharpAPI, ${config.sharp.league}, ${config.sharp.requestsPerMinute} req/min)`
+        + `(SharpAPI, ${config.ingestLeagues.filter((l) => LEAGUES[l]?.sharpPricing).join('+') || 'no priced league'}, `
+        + `${config.sharp.requestsPerMinute} req/min)`
       : '[worker] odds disabled (no SHARP_API_KEY — lines stay as seeded)',
   );
 

@@ -72,11 +72,19 @@ async function grantStipends(client) {
      SELECT p.id, pm.user_id, 'STIPEND', p.stipend_amount, p.season, cw.week
        FROM pools p
        JOIN pool_members pm ON pm.pool_id = p.id
+       -- Scoped to the pool's anchor league (leagues[1] — SQL arrays are
+       -- 1-indexed): a Thursday college kickoff must not decide which week an
+       -- NFL pool is on, and a pool playing both needs one stipend cadence
+       -- rather than two competing ones. The partial unique index makes a
+       -- stipend granted against the wrong week permanent, so this filter is
+       -- what keeps the mistake from being unrecoverable.
        CROSS JOIN LATERAL (
          SELECT COALESCE(
            (SELECT MIN(week) FROM games
-             WHERE season = p.season AND kickoff_time > CURRENT_TIMESTAMP),
-           (SELECT MAX(week) FROM games WHERE season = p.season)
+             WHERE league = p.leagues[1] AND season = p.season
+               AND kickoff_time > CURRENT_TIMESTAMP),
+           (SELECT MAX(week) FROM games
+             WHERE league = p.leagues[1] AND season = p.season)
          ) AS week
        ) cw
       WHERE p.pool_type = 'SPREAD_SHARKS'
@@ -97,10 +105,15 @@ async function eliminateBustMembers(client) {
   const { rows } = await client.query(
     `UPDATE pool_members pm
         SET is_eliminated = TRUE,
+            -- Anchor league, for the same reason as the stipend week above:
+            -- unfiltered, the other league's calendar would label when a
+            -- member went out.
             eliminated_week = COALESCE(
               (SELECT MIN(week) FROM games
-                WHERE season = p.season AND kickoff_time > CURRENT_TIMESTAMP),
-              (SELECT MAX(week) FROM games WHERE season = p.season)
+                WHERE league = p.leagues[1] AND season = p.season
+                  AND kickoff_time > CURRENT_TIMESTAMP),
+              (SELECT MAX(week) FROM games
+                WHERE league = p.leagues[1] AND season = p.season)
             )
        FROM pools p
       WHERE p.id = pm.pool_id

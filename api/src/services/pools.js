@@ -13,8 +13,8 @@ function generateInviteCode(length = 8) {
 }
 
 export async function createPool({
-  commissionerId, name, poolType, useSpreads, isPublic, season,
-  startingBalance, maxBetPerGame, minBet, bustPolicy, stipendAmount,
+  commissionerId, name, poolType, useSpreads, leagues, season,
+  startingBalance, maxBet, minBet, bustPolicy, stipendAmount,
   rebuyLimit, endsAt,
 }) {
   return withTransaction(async (client) => {
@@ -25,13 +25,13 @@ export async function createPool({
       try {
         const { rows } = await client.query(
           `INSERT INTO pools (commissioner_id, name, invite_code, pool_type,
-                              use_spreads, is_public, season, starting_balance,
-                              max_bet_per_game, min_bet, bust_policy,
-                              stipend_amount, rebuy_limit, ends_at)
+                              use_spreads, leagues, season,
+                              starting_balance, max_bet, min_bet,
+                              bust_policy, stipend_amount, rebuy_limit, ends_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
            RETURNING *`,
           [commissionerId, name, generateInviteCode(), poolType, useSpreads,
-            isPublic, season, startingBalance, maxBetPerGame, minBet,
+            leagues, season, startingBalance, maxBet, minBet,
             bustPolicy, stipendAmount, rebuyLimit, endsAt],
         );
         pool = rows[0];
@@ -105,23 +105,6 @@ export async function listPoolsForUser(userId) {
   return rows;
 }
 
-export async function listPublicPools(userId) {
-  const { rows } = await query(
-    `SELECT p.id, p.name, p.pool_type, p.use_spreads, p.season, p.invite_code,
-            u.username AS commissioner_username,
-            (SELECT COUNT(*)::INT FROM pool_members m WHERE m.pool_id = p.id) AS member_count
-       FROM pools p
-       JOIN users u ON u.id = p.commissioner_id
-      WHERE p.is_public = TRUE
-        AND NOT EXISTS (
-          SELECT 1 FROM pool_members m WHERE m.pool_id = p.id AND m.user_id = $1
-        )
-      ORDER BY p.created_at DESC`,
-    [userId],
-  );
-  return rows;
-}
-
 // Returns the pool plus the caller's membership, or null when the pool does not
 // exist. `membership` is null for a non-member.
 export async function getPoolWithMembership(poolId, userId, client = null) {
@@ -153,16 +136,6 @@ export async function requireMembership(poolId, userId, client = null) {
   const found = await getPoolWithMembership(poolId, userId, client);
   if (!found) throw notFoundError('Pool not found');
   if (!found.membership) throw forbidden('You are not a member of this pool');
-  return found;
-}
-
-// Members can always read; non-members only if the pool is public.
-export async function requireVisibility(poolId, userId) {
-  const found = await getPoolWithMembership(poolId, userId);
-  if (!found) throw notFoundError('Pool not found');
-  if (!found.membership && !found.pool.is_public) {
-    throw forbidden('This pool is private');
-  }
   return found;
 }
 

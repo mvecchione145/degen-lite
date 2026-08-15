@@ -1,0 +1,97 @@
+# Production overlay for a single-host deployment (see docs/deploy-ec2.md).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this changes, and why each one matters once the host is reachable from
+# the internet:
+#
+#   - Nothing but Caddy publishes a port. The base file binds Postgres, Redis,
+#     RedisInsight and the API to 0.0.0.0, which leaves a security group as the
+#     only thing between an unauthenticated Redis and the world.
+#   - DEV_TOOLS is off. It mounts /api/admin, which can fabricate final scores
+#     and force settlement, and it is gated by nothing but a valid login.
+#   - Secrets have no defaults. `${VAR:?message}` refuses to start rather than
+#     silently falling back to the development JWT secret.
+#   - RedisInsight moves behind a profile, so it stays off unless asked for.
+#   - Everything restarts on its own, and logs are capped so a chatty container
+#     cannot fill a 20 GB root volume.
+
+services:
+  db:
+    # !override replaces the base list. A plain list would append, and compose
+    # would then try to bind 5433 twice.
+    ports: !override
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    # Not published at all: only containers on the compose network need it.
+    ports: !reset []
+    restart: unless-stopped
+    logging: *logging
+
+  redis-ui:
+    # Off by default. Bring it up deliberately, over an SSH tunnel:
+    #   docker compose ... --profile debug up -d redis-ui
+    #   ssh -L 5540:127.0.0.1:5540 ec2-user@<host>
+    profiles: ["debug"]
+    ports: !override
+      - "127.0.0.1:5540:5540"
+    restart: unless-stopped
+    logging: *logging
+
+  api:
+    # Reached through Caddy → web → api on the internal network.
+    ports: !reset []
+    environment:
+      NODE_ENV: production
+      # Any logged-in user can fabricate results while this is true.
+      DEV_TOOLS: "false"
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env — 32+ random bytes}
+      DATABASE_URL: postgres://${POSTGRES_USER:-leaguepicks}:${POSTGRES_PASSWORD:?}@db:5432/${POSTGRES_DB:-leaguepicks}
+    restart: unless-stopped
+    logging: *logging
+
+  worker:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-leaguepicks}:${POSTGRES_PASSWORD:?}@db:5432/${POSTGRES_DB:-leaguepicks}
+    restart: unless-stopped
+    logging: *logging
+
+  web:
+    # Caddy terminates TLS and proxies here over the compose network.
+    ports: !reset []
+    restart: unless-stopped
+    logging: *logging
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - web
+    environment:
+      # A bare domain gets an automatic Let's Encrypt certificate. Use ":80"
+      # while you are still testing against a raw IP — ACME cannot issue a
+      # certificate for an IP address.
+      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in .env (domain, or :80)}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  caddydata:
+  caddyconfig:

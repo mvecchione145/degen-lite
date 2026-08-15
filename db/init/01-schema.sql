@@ -24,15 +24,25 @@ CREATE TABLE pools (
     pool_type VARCHAR(30) NOT NULL
         CHECK (pool_type IN ('SPREAD_SHARKS', 'PICKEM', 'CONFIDENCE', 'SURVIVOR')),
     use_spreads BOOLEAN NOT NULL DEFAULT FALSE,
-    is_public BOOLEAN NOT NULL DEFAULT FALSE,
+    -- The leagues this pool plays, one or both. Weeks are never merged across
+    -- them: college week 2 and NFL week 2 are different weekends, so the board
+    -- shows one league at a time and each keeps its own numbering. The first
+    -- entry is the anchor — it decides which week the pool is "on" for weekly
+    -- stipends, which are per pool rather than per league.
+    leagues VARCHAR(10)[] NOT NULL DEFAULT ARRAY['NFL']::VARCHAR(10)[]
+        CHECK (leagues <@ ARRAY['NFL', 'NCAAF']::VARCHAR(10)[]
+               AND array_length(leagues, 1) BETWEEN 1 AND 2),
     season INT NOT NULL,
 
     -- Spread Sharks settings. A NULL limit means "no limit" rather than
     -- carrying a separate on/off flag next to a stale number.
-    starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 10000.00
+    starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 20000.00
         CHECK (starting_balance > 0),
-    max_bet_per_game NUMERIC(14, 2)
-        CHECK (max_bet_per_game IS NULL OR max_bet_per_game >= 1),
+    -- The most that can be risked on a single wager. Deliberately per bet and
+    -- not per game: a member may back the same game as many times as their
+    -- balance allows, they just cannot do it in one oversized swing.
+    max_bet NUMERIC(14, 2)
+        CHECK (max_bet IS NULL OR max_bet >= 1),
     min_bet NUMERIC(14, 2)
         CHECK (min_bet IS NULL OR min_bet >= 1),
     bust_policy VARCHAR(20) NOT NULL DEFAULT 'ELIMINATE'
@@ -67,6 +77,11 @@ CREATE TABLE pool_members (
 -- conclude under its league's rules, so every bet on it is refunded.
 CREATE TABLE games (
     id VARCHAR(100) PRIMARY KEY,
+    -- Which football is this. Weeks only mean something within a league: the
+    -- NFL runs 1–18 on Sundays, college runs 1–16 on Saturdays plus a
+    -- postseason filed as 17, and the two must never share a board.
+    league VARCHAR(10) NOT NULL DEFAULT 'NFL'
+        CHECK (league IN ('NFL', 'NCAAF')),
     season INT NOT NULL,
     week INT NOT NULL,
     home_team VARCHAR(50) NOT NULL,
@@ -144,7 +159,9 @@ CREATE TABLE picks (
     UNIQUE (pool_id, user_id, game_id)
 );
 
-CREATE INDEX games_season_week_idx ON games (season, week);
+-- Every board read is (league, season, week); a season/week index would make
+-- two leagues share a scan and then filter half of it away.
+CREATE INDEX games_league_season_week_idx ON games (league, season, week);
 CREATE INDEX games_kickoff_idx ON games (kickoff_time);
 CREATE INDEX games_status_idx ON games (status);
 CREATE INDEX picks_pool_user_idx ON picks (pool_id, user_id);

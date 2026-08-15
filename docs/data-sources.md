@@ -49,6 +49,23 @@ Endpoints used:
 | `GET /odds?league=&market=` | Current lines. Markets are `point_spread` and `total_points` |
 | `GET /account` | Confirms the key and reports tier limits |
 
+### Two leagues
+
+The stack ingests the NFL and college football (NCAAF). Everything that differs
+between them — ESPN path, the `groups=80` FBS filter, season length, how the
+postseason is filed, and whether SharpAPI prices the league — lives in
+`api/src/leagues.js`. `INGEST_LEAGUES` (default `NFL`) selects which feeds the
+worker runs; each league is a full walk of ESPN's scoreboard per tick.
+
+Every game and every pool carries a `league`, and every board, week list and
+stipend calculation is scoped by it. Weeks only mean something within a league.
+
+**SharpAPI does not price NCAAF on the free tier.** `/odds?league=ncaaf` returns
+zero rows for every market while `nfl` returns rows on the same key, so college
+lines come from ESPN alone (98 of 99 week-1 games are priced). See
+[College Football](NCAAF.md). Note the slug is lowercase — an uppercase
+`league` parameter returns 200 with an empty result rather than an error.
+
 **SharpAPI cannot be the schedule of record.** Its events carry no scores and no
 week number, only a start time. Settlement needs final scores, and pools are
 organised by week, so:

@@ -13,8 +13,8 @@ spreads and totals from SharpAPI. The database bootstraps four accounts and one
 empty pool, and generates no sports data at all.
 
 - **Accounts** — register, sign in, JWT-authenticated requests
-- **Pools** — create a Spread Sharks pool with its full settings, private or
-  public, join by invite code, browse public pools
+- **Pools** — create a Spread Sharks pool with its full settings, over one
+  league or both, and join by invite code. Every pool is private
 - **Balances** — an append-only ledger per member per pool, with available
   balance and stake at risk tracked separately
 - **Board** — each week's games with a spread, a total, and a −110 price per side
@@ -279,7 +279,7 @@ rather than replaced. Because the legacy modes were hidden rather than removed,
 | --- | --- |
 | `users.password_hash` | The spec has no authentication storage at all |
 | `pools.season` | Pools were not season-scoped, so there was no way to resolve which slate a pool plays |
-| `pools.is_public` | Public pools are described in the product but absent from the schema |
+| `pools.leagues` | Which league(s) a pool plays. Weeks only mean something within a league, so every board read is scoped by it |
 | `pools.*` wager settings | Starting balance, caps, bust policy, and end date all come from the Spread Sharks story |
 | `games.total` | The spec has a spread but no over/under, and the total is half the product |
 | `games.status = 'VOID'` | A game that never officially concluded needs a terminal state distinct from `FINAL` |

@@ -17,6 +17,9 @@ const state = {
   // Visible slice of the week selector: { key, start }. Re-centres on the open
   // week whenever `key` changes; the arrows move `start` on their own.
   weekNav: { key: null, start: 0 },
+  // Pool history tab. The pool id rides along so opening a different pool
+  // starts at the newest page instead of inheriting the last one's offset.
+  history: { poolId: null, offset: 0 },
 };
 
 const app = document.getElementById('app');
@@ -191,17 +194,24 @@ const POOL_LABELS = {
 
 const isWagerPool = (pool) => pool.pool_type === 'SPREAD_SHARKS';
 
+// Which leagues a pool plays decides which games it can ever show, so they are
+// named on the pool rather than left to be inferred from the fixtures.
+const LEAGUE_LABELS = { NFL: 'NFL', NCAAF: 'College' };
+
+const leagueBadges = (pool) => (pool.leagues ?? ['NFL'])
+  .map((id) => `<span class="badge grey">${esc(LEAGUE_LABELS[id] ?? id)}</span>`)
+  .join('');
+
 function poolBadges(pool) {
   return `<span class="badge">${esc(POOL_LABELS[pool.pool_type] ?? pool.pool_type)}</span>
-    ${pool.use_spreads && !isWagerPool(pool) ? '<span class="badge grey">Against the spread</span>' : ''}
-    ${pool.is_public ? '<span class="badge grey">Public</span>' : ''}`;
+    ${leagueBadges(pool)}
+    ${pool.use_spreads && !isWagerPool(pool) ? '<span class="badge grey">Against the spread</span>' : ''}`;
 }
 
 async function renderPools() {
-  const [{ pools }, { pools: publicPools }] = await Promise.all([
-    api('/pools'),
-    api('/pools/public'),
-  ]);
+  // Every pool is invite-only, so there is nothing to browse — the only ways
+  // in are creating one or being given a code.
+  const { pools } = await api('/pools');
 
   app.innerHTML = `
     <div class="row-between" style="margin-bottom:16px;">
@@ -228,7 +238,23 @@ async function renderPools() {
             </a>`).join('')}
         </div>`}
 
-    <div class="grid">
+    <div class="stack">
+      <div class="card">
+        <h2>Join with an invite code</h2>
+        <form id="join-form">
+          <div class="field">
+            <label for="invite">Invite code</label>
+            <input id="invite" name="invite_code" required placeholder="SHARKS01"
+                   style="text-transform:uppercase" />
+          </div>
+          <button class="primary" type="submit">Join pool</button>
+          <p class="error" id="join-error" hidden></p>
+        </form>
+        <p class="muted small" style="margin-bottom:0">
+          Pools are private. The only way into one is a code from whoever runs it.
+        </p>
+      </div>
+
       <div class="card">
         <h2>Create a pool</h2>
         <form id="create-form">
@@ -247,18 +273,34 @@ async function renderPools() {
               </select>
             </div>` : ''}
           <div class="field">
+            <label for="pool-league">Leagues</label>
+            <select id="pool-league" name="league">
+              <option value="NFL">NFL</option>
+              <option value="NCAAF">NCAAF</option>
+              <option value="NFL,NCAAF">BOTH</option>
+            </select>
+            <p class="muted small" style="margin:6px 0 0">
+              A pool playing both keeps each league's own week numbering; the
+              board shows one at a time.
+            </p>
+          </div>
+          <div class="field">
             <label for="starting-balance">Starting balance</label>
             <input id="starting-balance" name="starting_balance" type="number"
-                   min="1" step="0.01" value="10000" required />
+                   min="1" step="0.01" value="20000" required />
           </div>
           <div class="field field-inline">
             <input id="cap-on" name="cap_on" type="checkbox" checked />
-            <label for="cap-on" style="margin:0">Cap total stake per game</label>
+            <label for="cap-on" style="margin:0">Cap the size of a single bet</label>
           </div>
           <div class="field" id="cap-field">
-            <label for="max-bet">Maximum per game</label>
-            <input id="max-bet" name="max_bet_per_game" type="number"
-                   min="1" step="0.01" value="500" />
+            <label for="max-bet">Maximum per bet</label>
+            <input id="max-bet" name="max_bet" type="number"
+                   min="1" step="1" value="5500" />
+            <p class="muted small" style="margin:6px 0 0">
+              Applies to each wager on its own. Members can back the same game
+              more than once.
+            </p>
           </div>
           <div class="field">
             <label for="bust-policy">When a member busts</label>
@@ -276,40 +318,9 @@ async function renderPools() {
             <label for="rebuy-limit">Rebuys allowed per season</label>
             <input id="rebuy-limit" name="rebuy_limit" type="number" min="0" max="100" value="1" />
           </div>
-          <div class="field field-inline">
-            <input id="is-public" name="is_public" type="checkbox" />
-            <label for="is-public" style="margin:0">List publicly</label>
-          </div>
           <button class="primary" type="submit">Create pool</button>
           <p class="error" id="create-error" hidden></p>
         </form>
-      </div>
-
-      <div class="card">
-        <h2>Join with an invite code</h2>
-        <form id="join-form">
-          <div class="field">
-            <label for="invite">Invite code</label>
-            <input id="invite" name="invite_code" required placeholder="SHARKS01"
-                   style="text-transform:uppercase" />
-          </div>
-          <button class="primary" type="submit">Join pool</button>
-          <p class="error" id="join-error" hidden></p>
-        </form>
-
-        ${publicPools.length > 0 ? `
-          <h3 style="margin-top:20px">Public pools</h3>
-          ${publicPools.map((pool) => `
-            <div class="row-between" style="padding:6px 0;border-top:1px solid var(--border)">
-              <div>
-                <div>${esc(pool.name)}</div>
-                <div class="muted small">
-                  ${esc(POOL_LABELS[pool.pool_type] ?? pool.pool_type)} ·
-                  ${pool.member_count} members
-                </div>
-              </div>
-              <button data-join="${esc(pool.invite_code)}">Join</button>
-            </div>`).join('')}` : ''}
       </div>
     </div>`;
 
@@ -334,10 +345,10 @@ async function renderPools() {
       const body = {
         name: form.name.value,
         pool_type: form.pool_type ? form.pool_type.value : 'SPREAD_SHARKS',
-        is_public: form.is_public.checked,
+        leagues: form.league.value.split(','),
         starting_balance: Number(form.starting_balance.value),
         // An unchecked cap sends null, which the API reads as "no limit".
-        max_bet_per_game: capToggle.checked ? Number(form.max_bet_per_game.value) : null,
+        max_bet: capToggle.checked ? Number(form.max_bet.value) : null,
         bust_policy: policy.value,
         ...(policy.value === 'TOPUP' ? { stipend_amount: Number(form.stipend_amount.value) } : {}),
         ...(policy.value === 'REBUY' ? { rebuy_limit: Number(form.rebuy_limit.value) } : {}),
@@ -443,13 +454,15 @@ function slipStakeState(game, board) {
   const stake = Number(state.slipStake);
   const valid = state.slipStake !== '' && Number.isFinite(stake)
     && stake >= board.balance.minimum_bet;
-  const allowance = game.remaining_allowance;
+  const maxBet = board.balance.max_bet;
   return {
     stake,
     valid,
-    allowance,
+    maxBet,
     profit: valid ? previewProfit(stake, board.price) : 0,
-    overAllowance: valid && allowance !== null && stake > allowance,
+    // Per wager, not per game — nothing already staked on this fixture counts
+    // against it.
+    overMax: valid && maxBet !== null && stake > maxBet,
     overBalance: valid && stake > board.balance.balance,
   };
 }
@@ -464,13 +477,13 @@ function slipPayout(game, board) {
 
 function slipFoot(game, board) {
   const {
-    stake, valid, profit, allowance, overAllowance, overBalance,
+    stake, valid, profit, maxBet, overMax, overBalance,
   } = slipStakeState(game, board);
   return `
     ${overBalance ? '<p class="error">That is more than your balance.</p>' : ''}
-    ${overAllowance ? `<p class="error">Only ${fmtMoney(allowance)} left under this pool's per-game cap.</p>` : ''}
+    ${overMax ? `<p class="error">This pool caps a single bet at ${fmtMoney(maxBet)}.</p>` : ''}
     <button class="primary slip-confirm" data-slip-confirm
-            ${!valid || overBalance || overAllowance ? 'disabled' : ''}>
+            ${!valid || overBalance || overMax ? 'disabled' : ''}>
       ${valid
     ? `Confirm — risk ${fmtMoney(stake)} to win ${fmtMoney(profit)}`
     : `Enter a stake of at least ${fmtMoney(board.balance.minimum_bet)}`}
@@ -559,8 +572,8 @@ function boardGame(game, board) {
       ${game.my_bets.length > 0 ? `
         <div class="bet-chips">
           ${game.my_bets.map(betChip).join('')}
-          ${game.remaining_allowance !== null && !game.locked
-    ? `<span class="muted small">${fmtMoney(game.remaining_allowance)} left under the cap</span>` : ''}
+          ${game.exposure > 0 && !game.locked
+    ? `<span class="muted small">${fmtMoney(game.exposure)} on this game</span>` : ''}
         </div>` : ''}
 
       ${game.other_bets.length > 0 ? `
@@ -652,7 +665,73 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
     </p>`;
 }
 
+/* -------------------------------------------------------- pool bet history */
+
+const HISTORY_PAGE_SIZE = 25;
+
+function poolHistoryTable(data) {
+  const { bets, page, summary } = data;
+
+  if (page.total === 0) {
+    return `<p class="muted">No bets have been placed in this pool yet.</p>
+      <p class="muted small">Bets on games that have not kicked off stay private
+        to whoever placed them, so this fills in as the week plays out.</p>`;
+  }
+
+  const first = page.offset + 1;
+  const last = page.offset + bets.length;
+
+  return `
+    <p class="muted small" style="margin-top:0">
+      ${page.total} bets · staked ${fmtMoney(summary.staked)} ·
+      net <span class="${summary.net >= 0 ? 'pos' : 'neg'}">${fmtSigned(summary.net)}</span>
+    </p>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Member</th><th>Status</th><th>Wager</th><th>Game</th>
+            <th class="num">Stake</th><th class="num">Net</th><th>Placed</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${bets.map((bet) => `
+            <tr class="${bet.is_mine ? 'me' : ''}">
+              <td>${esc(bet.username)}</td>
+              <td><span class="badge ${BET_STATUS_CLASS[bet.status]}">${bet.status}</span></td>
+              <td>${esc(bet.description)} <span class="muted small">${bet.price}</span></td>
+              <td class="muted small">
+                W${bet.week} · ${esc(bet.away_team)} @ ${esc(bet.home_team)}
+                ${bet.home_score !== null ? ` (${bet.away_score}–${bet.home_score})` : ''}
+              </td>
+              <td class="num">${fmtMoney(bet.stake)}</td>
+              <td class="num ${bet.net > 0 ? 'pos' : bet.net < 0 ? 'neg' : ''}">
+                ${bet.net === null ? '—' : fmtSigned(bet.net)}
+              </td>
+              <td class="muted small">${fmtKickoff(bet.placed_at)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="pager">
+      <span class="muted small">Showing ${first}–${last} of ${page.total}</span>
+      <span class="row">
+        <button data-history-page="${Math.max(0, page.offset - page.limit)}"
+                ${page.offset === 0 ? 'disabled' : ''}>← Newer</button>
+        <button data-history-page="${page.offset + page.limit}"
+                ${page.has_more ? '' : 'disabled'}>Older →</button>
+      </span>
+    </div>`;
+}
+
 /* --------------------------------------------------------------- week nav */
+
+// A single-league pool keeps its short URL; a multi-league pool needs the
+// league in the path because the week number alone is ambiguous between them.
+function boardHash(poolId, leagues, league, week) {
+  const path = leagues.length > 1 ? `${poolId}/${league}` : `${poolId}`;
+  return week == null ? `#/pools/${path}` : `#/pools/${path}/${week}`;
+}
 
 // Weeks shown either side of the open week before the arrows are needed.
 const WEEK_NAV_RADIUS = 3;
@@ -661,9 +740,9 @@ const WEEK_NAV_SIZE = WEEK_NAV_RADIUS * 2 + 1;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 // Resolves (and re-centres, when the open week changed) the visible slice.
-function weekWindow(weeks, week, poolId) {
+function weekWindow(weeks, week, poolId, league = '') {
   const max = Math.max(0, weeks.length - WEEK_NAV_SIZE);
-  const key = `${poolId}:${week}`;
+  const key = `${poolId}:${league}:${week}`;
   if (state.weekNav.key !== key) {
     const selected = Math.max(0, weeks.findIndex((w) => w.week === week));
     state.weekNav = { key, start: clamp(selected - WEEK_NAV_RADIUS, 0, max) };
@@ -673,8 +752,8 @@ function weekWindow(weeks, week, poolId) {
   return { start, end: start + WEEK_NAV_SIZE, atStart: start === 0, atEnd: start === max };
 }
 
-function weekNav(weeks, week, poolId) {
-  const { start, end, atStart, atEnd } = weekWindow(weeks, week, poolId);
+function weekNav(weeks, week, poolId, league = '') {
+  const { start, end, atStart, atEnd } = weekWindow(weeks, week, poolId, league);
   return `
     <div class="week-nav">
       <button class="week-shift" data-week-shift="-1" aria-label="Earlier weeks"
@@ -690,7 +769,7 @@ function weekNav(weeks, week, poolId) {
 
 // Arrows only slide the window, so they repaint the nav in place instead of
 // re-rendering the whole pool view.
-function wireWeekNav(weeks, week, poolId, onSelect) {
+function wireWeekNav(weeks, week, poolId, league, onSelect) {
   const host = app.querySelector('[data-week-nav]');
   if (!host) return;
 
@@ -701,16 +780,18 @@ function wireWeekNav(weeks, week, poolId, onSelect) {
   host.querySelectorAll('[data-week-shift]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.weekNav.start += Number(btn.dataset.weekShift);
-      host.innerHTML = weekNav(weeks, week, poolId);
-      wireWeekNav(weeks, week, poolId, onSelect);
+      host.innerHTML = weekNav(weeks, week, poolId, league);
+      wireWeekNav(weeks, week, poolId, league, onSelect);
     });
   });
 }
 
 async function renderSharksPool(detail, week) {
   const poolId = detail.pool.id;
+  const league = detail.league;
+  const leagues = detail.pool.leagues ?? ['NFL'];
   const [board, history, leaderboard] = await Promise.all([
-    api(`/pools/${poolId}/board?week=${week}`),
+    api(`/pools/${poolId}/board?league=${league}&week=${week}`),
     api(`/pools/${poolId}/bets`),
     api(`/pools/${poolId}/leaderboard`),
   ]);
@@ -797,8 +878,8 @@ async function renderSharksPool(detail, week) {
       <span class="muted small">Season ${pool.season} ·
         ${detail.members.length} members ·
         commissioner ${esc(pool.commissioner_username)}
-        ${pool.max_bet_per_game !== null
-    ? ` · max ${fmtMoney(pool.max_bet_per_game)} per game` : ' · no per-game cap'}
+        ${pool.max_bet !== null
+    ? ` · max ${fmtMoney(pool.max_bet)} per bet` : ' · no bet limit'}
         ${pool.ends_at ? ` · ends ${new Date(pool.ends_at).toLocaleDateString()}` : ''}</span>
     </div>
 
@@ -820,6 +901,7 @@ async function renderSharksPool(detail, week) {
     <div class="tabs">
       <button data-view="board" aria-selected="${state.tab === 'board'}">Board</button>
       <button data-view="bets" aria-selected="${state.tab === 'bets'}">My bets</button>
+      <button data-view="history" aria-selected="${state.tab === 'history'}">History</button>
       <button data-view="leaderboard" aria-selected="${state.tab === 'leaderboard'}">Leaderboard</button>
     </div>
 
@@ -830,7 +912,19 @@ async function renderSharksPool(detail, week) {
     ? '<button data-action="simulate" title="Development only: fabricate final scores for this week">Simulate results</button>'
     : ''}
       </div>
-      <div data-week-nav>${weekNav(detail.weeks, week, poolId)}</div>
+      ${leagues.length > 1 ? `
+        <div class="league-tabs" role="tablist">
+          ${leagues.map((id) => `
+            <button role="tab" data-league="${esc(id)}"
+                    aria-selected="${id === league}">
+              ${esc(LEAGUE_LABELS[id] ?? id)}
+            </button>`).join('')}
+        </div>
+        <p class="muted small" style="margin:0 0 10px">
+          Each league keeps its own week numbering — ${esc(LEAGUE_LABELS[league] ?? league)}
+          week ${week} here.
+        </p>` : ''}
+      <div data-week-nav>${weekNav(detail.weeks, week, poolId, league)}</div>
       <div id="board"></div>
     </div>
 
@@ -839,12 +933,42 @@ async function renderSharksPool(detail, week) {
       ${betHistoryTable(history)}
     </div>
 
+    <div class="card" data-panel="history" ${state.tab === 'history' ? '' : 'hidden'}>
+      <div class="row-between" style="margin-bottom:12px;">
+        <h2 style="margin:0">Pool history</h2>
+        <span class="muted small">Every member's bets, newest first</span>
+      </div>
+      <div id="history-body"><p class="muted">Loading…</p></div>
+    </div>
+
     <div class="card" data-panel="leaderboard" ${state.tab === 'leaderboard' ? '' : 'hidden'}>
       <h2>Leaderboard</h2>
       ${wagerLeaderboard(leaderboard, pool, state.user?.id)}
     </div>`;
 
   paintBoard();
+
+  // Fetched on demand rather than alongside the board: it is the one panel
+  // whose contents are paginated, and most visits never open it.
+  async function loadHistory(offset) {
+    const body = app.querySelector('#history-body');
+    if (!body) return;
+    state.history = { poolId, offset };
+    body.innerHTML = '<p class="muted">Loading…</p>';
+    try {
+      const data = await api(
+        `/pools/${poolId}/history?limit=${HISTORY_PAGE_SIZE}&offset=${offset}`,
+      );
+      body.innerHTML = poolHistoryTable(data);
+      body.querySelectorAll('[data-history-page]').forEach((btn) => {
+        btn.addEventListener('click', () => loadHistory(Number(btn.dataset.historyPage)));
+      });
+    } catch (err) {
+      body.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    }
+  }
+
+  const historyStart = () => (state.history.poolId === poolId ? state.history.offset : 0);
 
   app.querySelectorAll('[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -855,12 +979,31 @@ async function renderSharksPool(detail, week) {
       app.querySelectorAll('[data-panel]').forEach((panel) => {
         panel.hidden = panel.dataset.panel !== state.tab;
       });
+      // Re-fetched on every open so a settled bet is not shown as pending.
+      if (state.tab === 'history') loadHistory(historyStart());
     });
   });
 
-  wireWeekNav(detail.weeks, week, poolId, (selected) => {
+  // The tab survives a repaint, so a bet placed while History was open lands
+  // back on History — with an empty panel unless it is filled here too.
+  if (state.tab === 'history') loadHistory(historyStart());
+
+  wireWeekNav(detail.weeks, week, poolId, league, (selected) => {
     state.slip = null;
-    location.hash = `#/pools/${poolId}/${selected}`;
+    location.hash = boardHash(poolId, leagues, league, selected);
+  });
+
+  // Switching league switches the week set with it: week 2 in one league is a
+  // different weekend from week 2 in the other, so the target league's own
+  // current week is used rather than carrying this one's number across.
+  app.querySelectorAll('[data-league]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const next = btn.dataset.league;
+      if (next === league) return;
+      state.slip = null;
+      const target = detail.by_league?.[next]?.current_week;
+      location.hash = boardHash(poolId, leagues, next, target);
+    });
   });
 
   app.querySelector('[data-action="rebuy"]')?.addEventListener('click', async (event) => {
@@ -1120,7 +1263,7 @@ async function renderPickPool(detail, week) {
         <h2 style="margin:0">Week ${week} picks</h2>
         ${state.devTools ? '<button data-action="simulate">Simulate results</button>' : ''}
       </div>
-      <div data-week-nav>${weekNav(detail.weeks, week, poolId)}</div>
+      <div data-week-nav>${weekNav(detail.weeks, week, poolId, detail.league)}</div>
       <div id="games"></div>
       ${openGames.length > 0 && !detail.membership?.isEliminated ? `
         <div class="sticky-save">
@@ -1135,7 +1278,7 @@ async function renderPickPool(detail, week) {
 
   paint();
 
-  wireWeekNav(detail.weeks, week, poolId, (selected) => {
+  wireWeekNav(detail.weeks, week, poolId, detail.league, (selected) => {
     location.hash = `#/pools/${poolId}/${selected}`;
   });
 
@@ -1196,25 +1339,20 @@ async function renderPickPool(detail, week) {
 
 /* ------------------------------------------------------------ pool router */
 
-async function renderPool(poolId, requestedWeek) {
+async function renderPool(poolId, requestedLeague, requestedWeek) {
   const detail = await api(`/pools/${poolId}`);
-  const week = requestedWeek ?? detail.current_week ?? detail.weeks[0]?.week;
 
-  if (!detail.is_member) {
-    app.innerHTML = `
-      <p><a href="#/pools">← All pools</a></p>
-      <div class="card">
-        <h1>${esc(detail.pool.name)}</h1>
-        <div class="row">${poolBadges(detail.pool)}</div>
-        <p class="muted">You are not a member of this pool.</p>
-        <button class="primary" data-join="${esc(detail.pool.invite_code)}">Join pool</button>
-      </div>`;
-    app.querySelector('[data-join]').addEventListener('click', async () => {
-      await api('/pools/join', { method: 'POST', body: { invite_code: detail.pool.invite_code } });
-      await render();
-    });
-    return;
-  }
+  // The league decides which weeks exist, so it is resolved first. An unknown
+  // one in the URL falls back to the anchor rather than erroring.
+  const leagues = detail.pool.leagues ?? ['NFL'];
+  const league = leagues.includes(requestedLeague) ? requestedLeague : leagues[0];
+  const view = detail.by_league?.[league] ?? {
+    current_week: detail.current_week, weeks: detail.weeks,
+  };
+  const week = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+  detail.league = league;
+  detail.weeks = view.weeks;
+  detail.current_week = view.current_week;
 
   if (isWagerPool(detail.pool)) await renderSharksPool(detail, week);
   else await renderPickPool(detail, week);
@@ -1222,10 +1360,20 @@ async function renderPool(poolId, requestedWeek) {
 
 /* ----------------------------------------------------------------- router */
 
+// #/pools/:id, #/pools/:id/:week, or #/pools/:id/:league/:week. The league
+// segment is only present for a pool that plays more than one, so existing
+// single-league links keep working.
 function parseRoute() {
   const path = (location.hash.replace(/^#/, '') || '/pools').split('/').filter(Boolean);
   if (path[0] === 'pools' && path[1]) {
-    return { name: 'pool', poolId: path[1], week: path[2] ? Number(path[2]) : null };
+    const [, poolId, third, fourth] = path;
+    const leagueInPath = third && Number.isNaN(Number(third));
+    return {
+      name: 'pool',
+      poolId,
+      league: leagueInPath ? third.toUpperCase() : null,
+      week: Number(leagueInPath ? fourth : third) || null,
+    };
   }
   return { name: 'pools' };
 }
@@ -1248,7 +1396,7 @@ async function render() {
     const route = parseRoute();
     app.innerHTML = '<p class="muted">Loading…</p>';
 
-    if (route.name === 'pool') await renderPool(route.poolId, route.week);
+    if (route.name === 'pool') await renderPool(route.poolId, route.league, route.week);
     else await renderPools();
   } catch (err) {
     if (!state.token) {
