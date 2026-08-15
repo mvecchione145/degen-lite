@@ -7,20 +7,20 @@ import { requireMembership } from './pools.js';
 // confidence ranks within a week, one survivor pick per week, and no reusing a
 // survivor team. See docs/mvp.md.
 
-async function loadWeekGames(client, season, week) {
+async function loadWeekGames(client, league, season, week) {
   const { rows } = await client.query(
-    `SELECT id, season, week, home_team, away_team, kickoff_time, spread,
+    `SELECT id, league, season, week, home_team, away_team, kickoff_time, spread,
             home_score, away_score, status,
             (kickoff_time <= CURRENT_TIMESTAMP) AS locked
        FROM games
-      WHERE season = $1 AND week = $2
+      WHERE league = $1 AND season = $2 AND week = $3
       ORDER BY kickoff_time, id`,
-    [season, week],
+    [league, season, week],
   );
   return rows;
 }
 
-async function loadUserPicks(client, poolId, userId, season, week = null) {
+async function loadUserPicks(client, poolId, userId, league, season, week = null) {
   const { rows } = await client.query(
     `SELECT p.id, p.game_id, p.selected_team, p.confidence_rank,
             p.tiebreaker_points, p.is_correct, p.settled_at,
@@ -28,10 +28,11 @@ async function loadUserPicks(client, poolId, userId, season, week = null) {
             (g.kickoff_time <= CURRENT_TIMESTAMP) AS locked
        FROM picks p
        JOIN games g ON g.id = p.game_id
-      WHERE p.pool_id = $1 AND p.user_id = $2 AND g.season = $3
-        AND ($4::INT IS NULL OR g.week = $4)
+      WHERE p.pool_id = $1 AND p.user_id = $2
+        AND g.league = $3 AND g.season = $4
+        AND ($5::INT IS NULL OR g.week = $5)
       ORDER BY g.kickoff_time, g.id`,
-    [poolId, userId, season, week],
+    [poolId, userId, league, season, week],
   );
   return rows;
 }
@@ -47,8 +48,8 @@ export async function getWeekView({ poolId, userId, week }) {
   assertPickPool(pool);
   const client = { query };
 
-  const games = await loadWeekGames(client, pool.season, week);
-  const myPicks = await loadUserPicks(client, poolId, userId, pool.season, week);
+  const games = await loadWeekGames(client, pool.leagues[0], pool.season, week);
+  const myPicks = await loadUserPicks(client, poolId, userId, pool.leagues[0], pool.season, week);
   const myPicksByGame = new Map(myPicks.map((p) => [p.game_id, p]));
 
   // Other members' picks are only revealed once a game has kicked off.
@@ -58,11 +59,12 @@ export async function getWeekView({ poolId, userId, week }) {
        FROM picks p
        JOIN users u ON u.id = p.user_id
        JOIN games g ON g.id = p.game_id
-      WHERE p.pool_id = $1 AND g.season = $2 AND g.week = $3
+      WHERE p.pool_id = $1
+        AND g.league = $2 AND g.season = $3 AND g.week = $4
         AND g.kickoff_time <= CURRENT_TIMESTAMP
-        AND p.user_id <> $4
+        AND p.user_id <> $5
       ORDER BY u.username`,
-    [poolId, pool.season, week, userId],
+    [poolId, pool.leagues[0], pool.season, week, userId],
   );
 
   const revealedByGame = new Map();
@@ -73,7 +75,7 @@ export async function getWeekView({ poolId, userId, week }) {
 
   let usedTeams = [];
   if (pool.pool_type === 'SURVIVOR') {
-    const allPicks = await loadUserPicks(client, poolId, userId, pool.season);
+    const allPicks = await loadUserPicks(client, poolId, userId, pool.leagues[0], pool.season);
     usedTeams = allPicks
       .filter((p) => p.week !== week)
       .map((p) => ({ team: p.selected_team, week: p.week }));
@@ -178,7 +180,7 @@ export async function submitPicks({ poolId, userId, week, submissions }) {
     const { pool, membership } = await requireMembership(poolId, userId, client);
     assertPickPool(pool);
 
-    const games = await loadWeekGames(client, pool.season, week);
+    const games = await loadWeekGames(client, pool.leagues[0], pool.season, week);
     if (games.length === 0) {
       throw badRequest(`Week ${week} has no games in season ${pool.season}`);
     }
@@ -186,12 +188,12 @@ export async function submitPicks({ poolId, userId, week, submissions }) {
 
     validateCommon(submissions, gamesById);
 
-    const existingThisWeek = await loadUserPicks(client, poolId, userId, pool.season, week);
+    const existingThisWeek = await loadUserPicks(client, poolId, userId, pool.leagues[0], pool.season, week);
 
     if (pool.pool_type === 'CONFIDENCE') {
       validateConfidence(submissions, existingThisWeek, games.length);
     } else if (pool.pool_type === 'SURVIVOR') {
-      const allPicks = await loadUserPicks(client, poolId, userId, pool.season);
+      const allPicks = await loadUserPicks(client, poolId, userId, pool.leagues[0], pool.season);
       validateSurvivor({ submissions, existingThisWeek, allPicks, week, membership });
 
       // A survivor pick replaces the week's pick rather than adding to it.

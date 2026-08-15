@@ -38,7 +38,7 @@ you get the real schedule from ESPN and ESPN's own lines, just not SharpAPI's.
 
 ## How a pool works
 
-- Every member starts on the pool's **starting balance** (10,000 by default).
+- Every member starts on the pool's **starting balance** (20,000 by default).
 - Each game offers a **spread** and a **total**, both priced at **−110**.
 - A stake carries two decimal places and can never be below **1.00**.
 - The line and price are captured when the bet is placed; later movement does not

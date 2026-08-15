@@ -11,24 +11,44 @@ function assertWagerPool(pool) {
   }
 }
 
+// Resolves the league a request is asking for against the pool's set. Absent
+// means the anchor league, which is what a single-league pool always gets.
+export function assertPoolLeague(pool, league) {
+  if (league == null) return pool.leagues[0];
+  if (!pool.leagues.includes(league)) {
+    throw badRequest(
+      `This pool does not play ${league} (it plays ${pool.leagues.join(', ')})`,
+    );
+  }
+  return league;
+}
+
 function assertOpen(pool) {
   if (pool.ends_at && new Date(pool.ends_at) <= new Date()) {
     throw badRequest('This pool has reached its end date and takes no new bets');
   }
 }
 
-async function loadGame(client, gameId, season) {
+async function loadGame(client, gameId, pool) {
   const { rows } = await client.query(
-    `SELECT id, season, week, home_team, away_team, kickoff_time, spread, total,
-            home_score, away_score, status,
+    `SELECT id, league, season, week, home_team, away_team, kickoff_time,
+            spread, total, home_score, away_score, status,
             (kickoff_time <= CURRENT_TIMESTAMP) AS locked
        FROM games WHERE id = $1`,
     [gameId],
   );
   const game = rows[0];
   if (!game) throw notFoundError('No such game');
-  if (game.season !== season) {
+  if (game.season !== pool.season) {
     throw badRequest("That game is not in this pool's season");
+  }
+  // Checked here rather than left to the board query: the board is only where
+  // games are offered, and a game id posted directly would otherwise let a
+  // pool take a wager on a league it does not play.
+  if (!pool.leagues.includes(game.league)) {
+    throw badRequest(
+      `That game is not in this pool's leagues (${pool.leagues.join(', ')})`,
+    );
   }
   return game;
 }
@@ -40,8 +60,8 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
 
   const placed = await withTransaction(async (client) => {
     // Serialise this member's placements in this pool. Without it, two
-    // simultaneous bets can both read the same balance and exposure, and
-    // together breach the balance or the per-game cap.
+    // simultaneous bets can both read the same balance and together overdraw
+    // it — each looks affordable on its own.
     await client.query(
       'SELECT 1 FROM pool_members WHERE pool_id = $1 AND user_id = $2 FOR UPDATE',
       [poolId, userId],
@@ -55,7 +75,7 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
       throw forbidden('You have been eliminated from this pool');
     }
 
-    const game = await loadGame(client, gameId, pool.season);
+    const game = await loadGame(client, gameId, pool);
     if (game.locked || game.status !== 'SCHEDULED') {
       throw badRequest(
         `${game.away_team} @ ${game.home_team} has already kicked off and is closed`,
@@ -71,23 +91,20 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
     const stakeText = stake.toFixed(2);
 
     // Every comparison happens in exact NUMERIC, not JS floating point.
+    // The cap is per wager, not per game: nothing is summed across the bets a
+    // member already has on this fixture, so they may back it repeatedly as
+    // long as each stake is within the limit and the balance covers it.
     const { rows: [check] } = await client.query(
       `WITH bal AS (
           SELECT COALESCE(SUM(amount), 0) AS balance
             FROM ledger_entries WHERE pool_id = $1 AND user_id = $2
-       ), exposure AS (
-          SELECT COALESCE(SUM(stake), 0) AS staked
-            FROM bets
-           WHERE pool_id = $1 AND user_id = $2 AND game_id = $3
-             AND status <> 'VOID'
        )
-       SELECT bal.balance, exposure.staked,
-              bal.balance >= $4::NUMERIC AS can_afford,
-              ($5::NUMERIC IS NULL
-               OR exposure.staked + $4::NUMERIC <= $5::NUMERIC) AS within_cap,
-              $4::NUMERIC >= $6::NUMERIC AS meets_minimum
-         FROM bal, exposure`,
-      [poolId, userId, gameId, stakeText, pool.max_bet_per_game, minimum],
+       SELECT bal.balance,
+              bal.balance >= $3::NUMERIC AS can_afford,
+              ($4::NUMERIC IS NULL OR $3::NUMERIC <= $4::NUMERIC) AS within_cap,
+              $3::NUMERIC >= $5::NUMERIC AS meets_minimum
+         FROM bal`,
+      [poolId, userId, stakeText, pool.max_bet, minimum],
     );
 
     if (!check.meets_minimum) {
@@ -99,11 +116,8 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
       );
     }
     if (!check.within_cap) {
-      const cap = Number(pool.max_bet_per_game);
-      const staked = Number(check.staked);
       throw badRequest(
-        `This pool caps total stake on one game at ${cap.toFixed(2)}. `
-        + `You already have ${staked.toFixed(2)} on this game, so ${(cap - staked).toFixed(2)} is left.`,
+        `This pool caps a single bet at ${Number(pool.max_bet).toFixed(2)}`,
       );
     }
 
@@ -139,27 +153,32 @@ export async function placeBet({ poolId, userId, gameId, market, selection, stak
   };
 }
 
-export async function getBoard({ poolId, userId, week }) {
+// A pool may play more than one league, but a board never mixes them: their
+// week numbers describe different weekends (college week 2 is a week earlier
+// than NFL week 2), so the caller picks a league and gets that league's week.
+export async function getBoard({ poolId, userId, league, week }) {
   const { pool, membership } = await requireMembership(poolId, userId);
   assertWagerPool(pool);
+  const boardLeague = assertPoolLeague(pool, league);
 
   const { rows: games } = await query(
-    `SELECT id, season, week, home_team, away_team, kickoff_time, spread, total,
-            home_score, away_score, status,
+    `SELECT id, league, season, week, home_team, away_team, kickoff_time,
+            spread, total, home_score, away_score, status,
             (kickoff_time <= CURRENT_TIMESTAMP) AS locked
        FROM games
-      WHERE season = $1 AND week = $2
+      WHERE league = $1 AND season = $2 AND week = $3
       ORDER BY kickoff_time, id`,
-    [pool.season, week],
+    [boardLeague, pool.season, week],
   );
 
   const { rows: myBets } = await query(
     `SELECT b.*, b.stake::NUMERIC AS stake, b.net::NUMERIC AS net
        FROM bets b
        JOIN games g ON g.id = b.game_id
-      WHERE b.pool_id = $1 AND b.user_id = $2 AND g.season = $3 AND g.week = $4
+      WHERE b.pool_id = $1 AND b.user_id = $2
+        AND g.league = $3 AND g.season = $4 AND g.week = $5
       ORDER BY b.placed_at`,
-    [poolId, userId, pool.season, week],
+    [poolId, userId, boardLeague, pool.season, week],
   );
 
   // Other members' bets are revealed once a game kicks off and they can no
@@ -170,11 +189,12 @@ export async function getBoard({ poolId, userId, week }) {
        FROM bets b
        JOIN users u ON u.id = b.user_id
        JOIN games g ON g.id = b.game_id
-      WHERE b.pool_id = $1 AND g.season = $2 AND g.week = $3
+      WHERE b.pool_id = $1
+        AND g.league = $2 AND g.season = $3 AND g.week = $4
         AND g.kickoff_time <= CURRENT_TIMESTAMP
-        AND b.user_id <> $4
+        AND b.user_id <> $5
       ORDER BY u.username`,
-    [poolId, pool.season, week, userId],
+    [poolId, boardLeague, pool.season, week, userId],
   );
 
   const betsByGame = new Map();
@@ -189,11 +209,11 @@ export async function getBoard({ poolId, userId, week }) {
     revealedByGame.get(bet.game_id).push(bet);
   }
 
-  const cap = pool.max_bet_per_game === null ? null : Number(pool.max_bet_per_game);
 
   return {
     pool,
     membership,
+    league: boardLeague,
     week,
     price: STANDARD_PRICE,
     balance: await getBalanceSummary(pool, userId),
@@ -207,12 +227,84 @@ export async function getBoard({ poolId, userId, week }) {
         ...game,
         my_bets: mine,
         other_bets: revealedByGame.get(game.id) ?? [],
+        // What this member already has riding on the fixture. Context only —
+        // the cap applies per bet, so this does not limit the next one.
         exposure: Number(exposure.toFixed(2)),
-        remaining_allowance: cap === null
-          ? null
-          : Number(Math.max(0, cap - exposure).toFixed(2)),
       };
     }),
+  };
+}
+
+/* --------------------------------------------------------- pool-wide history */
+
+// Who may see whose bet. This mirrors the board exactly (see getBoard): another
+// member's wager is revealed once its game kicks off and it can no longer be
+// acted on, and your own are always yours to see. Listing everyone's pending
+// bets in a history tab would hand members the pool's picks before they place
+// their own, which is the one thing the board is careful never to do.
+const VISIBLE_TO_MEMBER = `(b.user_id = $2 OR g.kickoff_time <= CURRENT_TIMESTAMP)`;
+
+// A page of every bet in the pool, newest first. Paginated because a full
+// season across a dozen members runs to thousands of rows, and none of the
+// callers want them all at once.
+export async function listPoolBets({ poolId, userId, limit = 25, offset = 0 }) {
+  const { pool } = await requireMembership(poolId, userId);
+  assertWagerPool(pool);
+
+  // Counted separately rather than with a window function: an offset past the
+  // end returns no rows, and a count carried on the rows would then report a
+  // total of zero and strand the pager on an empty page.
+  const [page, totals] = await Promise.all([
+    query(
+      `SELECT b.id, b.user_id, u.username, b.game_id, b.market, b.selection,
+              b.line, b.price, b.stake::NUMERIC AS stake, b.status,
+              b.net::NUMERIC AS net, b.placed_at, b.settled_at,
+              g.week, g.home_team, g.away_team, g.kickoff_time,
+              g.home_score, g.away_score, g.status AS game_status
+         FROM bets b
+         JOIN games g ON g.id = b.game_id
+         JOIN users u ON u.id = b.user_id
+        WHERE b.pool_id = $1 AND ${VISIBLE_TO_MEMBER}
+        -- id breaks ties so a page boundary can't drop or repeat a bet when
+        -- several land in the same transaction.
+        ORDER BY b.placed_at DESC, b.id DESC
+        LIMIT $3 OFFSET $4`,
+      [poolId, userId, limit, offset],
+    ),
+    query(
+      `SELECT COUNT(*)::INT AS total,
+              COALESCE(SUM(b.stake), 0)::NUMERIC AS staked,
+              COALESCE(SUM(b.net) FILTER (WHERE b.net IS NOT NULL), 0)::NUMERIC AS net
+         FROM bets b
+         JOIN games g ON g.id = b.game_id
+        WHERE b.pool_id = $1 AND ${VISIBLE_TO_MEMBER}`,
+      [poolId, userId],
+    ),
+  ]);
+
+  const bets = page.rows.map((bet) => ({
+    ...bet,
+    stake: Number(bet.stake),
+    net: bet.net === null ? null : Number(bet.net),
+    is_mine: bet.user_id === userId,
+    description: describeSelection(
+      { ...bet, spread: bet.line, total: bet.line }, bet.market, bet.selection,
+    ),
+  }));
+
+  const { total, staked, net } = totals.rows[0];
+
+  return {
+    pool,
+    bets,
+    page: {
+      limit,
+      offset,
+      total,
+      has_more: offset + bets.length < total,
+    },
+    // Across every bet visible to this member, not just the page on screen.
+    summary: { total, staked: Number(staked), net: Number(net) },
   };
 }
 

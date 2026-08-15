@@ -62,6 +62,10 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 
 .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 
+/* One column at any width. Joining is the common action and the short form, so
+   it sits above the long creation form rather than beside it. */
+.stack { display: grid; gap: 12px; grid-template-columns: 1fr; }
+
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 
@@ -237,6 +241,25 @@ label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px
   border-radius: 999px;
   padding: 3px 10px;
 }
+
+/* League switch on a pool that plays more than one. Distinct from .tabs: it
+   selects which slate the board is showing, not which panel is open. */
+.league-tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+.league-tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.pager .row { gap: 8px; }
 
 .table-scroll { overflow-x: auto; }
 .table-scroll table { min-width: 560px; }

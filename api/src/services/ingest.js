@@ -1,14 +1,26 @@
 import { query } from '../db.js';
 import { config, sharpEnabled } from '../config.js';
+import { DEFAULT_LEAGUE, ingestWeeks, leagueOrThrow } from '../leagues.js';
 import { fetchLines } from './sharp.js';
 
 // Score ingestion from ESPN's public scoreboard endpoints (docs/data-sources.md).
-// Off by default: the seeded demo season is self-sufficient and needs no network.
 // Ingested games are namespaced with an `espn:` id prefix so they never collide
-// with seeded fixtures.
+// with seeded fixtures. ESPN event ids are unique across leagues, so the two
+// slates share the table without colliding on the primary key.
 
-const SCOREBOARD_URL =
-  'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
+const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports';
+
+function scoreboardUrl(league, { season, week, seasontype }) {
+  const url = new URL(`${ESPN_BASE}/${league.espnPath}/scoreboard`);
+  url.searchParams.set('dates', String(season));
+  url.searchParams.set('seasontype', String(seasontype));
+  url.searchParams.set('week', String(week));
+  // Per-league extras: college needs groups=80 for the full FBS slate.
+  for (const [key, value] of Object.entries(league.espnParams)) {
+    url.searchParams.set(key, value);
+  }
+  return url;
+}
 
 const STATUS_BY_STATE = { pre: 'SCHEDULED', in: 'IN_PROGRESS', post: 'FINAL' };
 
@@ -33,7 +45,7 @@ export function homeSpread(odds, homeAbbrev) {
   return abbrev === homeAbbrev ? line : -line;
 }
 
-function toGameRow(event, season, week) {
+function toGameRow(event, { leagueId, season, week }) {
   const competition = event?.competitions?.[0];
   const competitors = competition?.competitors ?? [];
   const home = competitors.find((c) => c.homeAway === 'home');
@@ -51,6 +63,7 @@ function toGameRow(event, season, week) {
 
   return {
     id: `espn:${event.id}`,
+    league: leagueId,
     season,
     week,
     home_team: home.team?.displayName ?? 'Home',
@@ -75,19 +88,21 @@ async function upsertGames(rows) {
   let count = 0;
   for (const row of rows) {
     await query(
-      `INSERT INTO games (id, season, week, home_team, away_team, kickoff_time,
-                          spread, total, home_score, away_score, status, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      `INSERT INTO games (id, league, season, week, home_team, away_team,
+                          kickoff_time, spread, total, home_score, away_score,
+                          status, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
        ON CONFLICT (id) DO UPDATE
-          SET kickoff_time = EXCLUDED.kickoff_time,
-              spread = CASE WHEN $12 THEN games.spread ELSE EXCLUDED.spread END,
-              total = CASE WHEN $12 THEN games.total
+          SET week = EXCLUDED.week,
+              kickoff_time = EXCLUDED.kickoff_time,
+              spread = CASE WHEN $13 THEN games.spread ELSE EXCLUDED.spread END,
+              total = CASE WHEN $13 THEN games.total
                            ELSE COALESCE(EXCLUDED.total, games.total) END,
               home_score = COALESCE(EXCLUDED.home_score, games.home_score),
               away_score = COALESCE(EXCLUDED.away_score, games.away_score),
               status = EXCLUDED.status,
               updated_at = CURRENT_TIMESTAMP`,
-      [row.id, row.season, row.week, row.home_team, row.away_team,
+      [row.id, row.league, row.season, row.week, row.home_team, row.away_team,
         row.kickoff_time, row.spread, row.total, row.home_score, row.away_score,
         row.status, sharpOwnsLines],
     );
@@ -96,47 +111,102 @@ async function upsertGames(rows) {
   return count;
 }
 
-async function fetchWeek(season, week) {
-  const url = `${SCOREBOARD_URL}?dates=${season}&seasontype=2&week=${week}`;
+// `week` is what ESPN is asked for; `storeAsWeek` is what the rows are filed
+// under. They differ only for a postseason ESPN packs into a single week.
+async function fetchWeek(league, season, { seasontype, week, storeAsWeek }) {
+  const url = scoreboardUrl(league, { season, week, seasontype });
   const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) {
-    throw new Error(`ESPN responded ${response.status} for week ${week}`);
+    throw new Error(
+      `ESPN responded ${response.status} for ${league.id} `
+      + `seasontype ${seasontype} week ${week}`,
+    );
   }
   const body = await response.json();
   return (body.events ?? [])
-    .map((event) => toGameRow(event, season, week))
+    .map((event) => toGameRow(event, {
+      leagueId: league.id, season, week: storeAsWeek,
+    }))
     .filter(Boolean);
 }
 
 /* ------------------------------------------------------- SharpAPI line feed */
 
-// Team names arrive in the same "New England Patriots" shape from both ESPN and
-// SharpAPI, so a normalised exact match carries the join. The nickname fallback
-// covers a relocation or rebrand naming one side differently.
+// In the NFL both feeds spell a team the same way ("New England Patriots"), so
+// a normalised exact match carries the join and a last-word nickname is a safe
+// fallback for a rebrand.
+//
+// College breaks both halves of that. ESPN says "North Carolina Tar Heels"
+// where SharpAPI says "North Carolina", and 230 teams share ten Bulldogs and
+// nine Wildcats between them — so the nickname fallback is disabled per league
+// (leagues.js) and the school name is matched on its own.
 const normalizeTeam = (name) => String(name ?? '')
   .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 const nickname = (name) => normalizeTeam(name).split(' ').pop();
 
-const pairKeys = (away, home) => [
-  `${normalizeTeam(away)}@${normalizeTeam(home)}`,
-  `${nickname(away)}@${nickname(home)}`,
-];
+// Spellings the two feeds genuinely disagree on, normalised on both sides.
+// Keyed on the ESPN form because that is the schedule of record.
+const TEAM_ALIASES = new Map([
+  ['ole miss', 'mississippi'],
+  ['uconn', 'connecticut'],
+  ['miami oh', 'miami ohio'],
+  ['nc state', 'north carolina state'],
+  ['usc', 'southern california'],
+  ['smu', 'southern methodist'],
+  ['utsa', 'texas san antonio'],
+  ['utep', 'texas el paso'],
+  ['ucf', 'central florida'],
+  ['fiu', 'florida international'],
+  ['fau', 'florida atlantic'],
+]);
 
-// The same fixture recurs across a season, so a name match alone is ambiguous.
-// Kickoffs must also land within a couple of days of each other.
-const KICKOFF_TOLERANCE_MS = 2 * 24 * 60 * 60 * 1000;
+const canonical = (name) => {
+  const normal = normalizeTeam(name);
+  return TEAM_ALIASES.get(normal) ?? normal;
+};
 
-export async function applySharpLines(league = config.sharp.league) {
+// ESPN carries the nickname, SharpAPI usually does not, so the school-name
+// prefix has to be recoverable from the long form. Nothing is stripped when the
+// remainder would be empty — "Army" is the whole name, not a nickname.
+function schoolName(name) {
+  const words = canonical(name).split(' ');
+  return words.length > 1 ? words.slice(0, -1).join(' ') : words.join(' ');
+}
+
+function pairKeys(league, away, home) {
+  const keys = [`${canonical(away)}@${canonical(home)}`];
+  if (league.nicknameFallback) {
+    keys.push(`${nickname(away)}@${nickname(home)}`);
+  } else {
+    // College only: try the name with its nickname removed, which is the shape
+    // SharpAPI publishes. Never the nickname on its own.
+    keys.push(`${schoolName(away)}@${schoolName(home)}`);
+  }
+  return [...new Set(keys)];
+}
+
+export async function applySharpLines(league = DEFAULT_LEAGUE) {
+  const leagueDef = leagueOrThrow(league);
+
   if (!sharpEnabled()) {
-    return { skipped: 'SHARP_API_KEY is not set', updated: 0 };
+    return { league: leagueDef.id, skipped: 'SHARP_API_KEY is not set', updated: 0 };
+  }
+  if (!leagueDef.sharpPricing) {
+    return {
+      league: leagueDef.id,
+      skipped: `SharpAPI does not price ${leagueDef.id} on this key — `
+        + 'lines stay as ESPN supplied them',
+      updated: 0,
+    };
   }
 
-  const feed = await fetchLines(league);
+  const feed = await fetchLines(leagueDef.sharpLeague);
+  const toleranceMs = leagueDef.kickoffToleranceHours * 60 * 60 * 1000;
 
   const index = new Map();
   for (const line of feed.lines.values()) {
-    for (const key of pairKeys(line.away_team, line.home_team)) {
+    for (const key of pairKeys(leagueDef, line.away_team, line.home_team)) {
       if (!index.has(key)) index.set(key, []);
       index.get(key).push(line);
     }
@@ -147,11 +217,13 @@ export async function applySharpLines(league = config.sharp.league) {
   const { rows: games } = await query(
     `SELECT id, home_team, away_team, kickoff_time, spread, total
        FROM games
-      WHERE status = 'SCHEDULED' AND kickoff_time > CURRENT_TIMESTAMP`,
+      WHERE league = $1
+        AND status = 'SCHEDULED' AND kickoff_time > CURRENT_TIMESTAMP`,
+    [leagueDef.id],
   );
 
   const result = {
-    league,
+    league: leagueDef.id,
     events_priced: feed.lines.size,
     rows_fetched: feed.fetched,
     served_from_cache: feed.served_from_cache,
@@ -165,11 +237,11 @@ export async function applySharpLines(league = config.sharp.league) {
     const kickoff = new Date(game.kickoff_time).getTime();
 
     let match = null;
-    for (const key of pairKeys(game.away_team, game.home_team)) {
+    for (const key of pairKeys(leagueDef, game.away_team, game.home_team)) {
       const candidates = index.get(key) ?? [];
       for (const candidate of candidates) {
         const delta = Math.abs(new Date(candidate.start_time).getTime() - kickoff);
-        if (delta <= KICKOFF_TOLERANCE_MS) {
+        if (delta <= toleranceMs) {
           match = candidate;
           break;
         }
@@ -204,36 +276,52 @@ export async function applySharpLines(league = config.sharp.league) {
 // overlapping week numbers, so ingesting on top of seeded data produces a board
 // that mixes synthetic fixtures with real ones. Refuse rather than corrupt the
 // demo; a fresh volume is the intended starting point for live data.
-async function seededGamesPresent(season) {
+async function seededGamesPresent(season, leagueId) {
   const { rows } = await query(
     `SELECT COUNT(*)::INT AS n FROM games
-      WHERE season = $1 AND id NOT LIKE 'espn:%' AND id NOT LIKE 'sharp:%'`,
-    [season],
+      WHERE season = $1 AND league = $2
+        AND id NOT LIKE 'espn:%' AND id NOT LIKE 'sharp:%'`,
+    [season, leagueId],
   );
   return rows[0].n > 0;
 }
 
-export async function ingestSeason(season, { weeks = 18, force = false } = {}) {
-  const result = { season, games_upserted: 0, weeks_ingested: 0, errors: [] };
+// The week list comes from the league, not from a caller-supplied count: the
+// NFL is 18 regular weeks, college is 16 plus a postseason filed as week 17.
+export async function ingestSeason(season, { league = DEFAULT_LEAGUE, force = false } = {}) {
+  const leagueDef = leagueOrThrow(league);
+  const result = {
+    league: leagueDef.id, season, games_upserted: 0, weeks_ingested: 0, errors: [],
+  };
 
-  if (!force && await seededGamesPresent(season)) {
-    result.skipped = `Season ${season} already holds seeded demo games. `
-      + 'Ingesting real fixtures on top of them would mix synthetic and real '
-      + 'games on the same week. Start from a clean volume '
-      + '(docker compose down -v) or pass force.';
+  if (!force && await seededGamesPresent(season, leagueDef.id)) {
+    result.skipped = `${leagueDef.id} season ${season} already holds seeded demo `
+      + 'games. Ingesting real fixtures on top of them would mix synthetic and '
+      + 'real games on the same week. Start from a clean volume '
+      + '(scripts/reset-db.sh) or pass force.';
     return result;
   }
 
-  for (let week = 1; week <= weeks; week += 1) {
+  for (const slate of ingestWeeks(leagueDef)) {
     try {
-      const rows = await fetchWeek(season, week);
+      const rows = await fetchWeek(leagueDef, season, slate);
       result.games_upserted += await upsertGames(rows);
       result.weeks_ingested += 1;
     } catch (err) {
       // One bad week should not abort the run.
-      result.errors.push(`week ${week}: ${err.message}`);
+      result.errors.push(`week ${slate.storeAsWeek}: ${err.message}`);
     }
   }
 
   return result;
+}
+
+// Every configured league, in order. Errors are collected per league so an
+// ESPN outage on one does not cost the other its refresh.
+export async function ingestConfiguredLeagues(season, options = {}) {
+  const runs = [];
+  for (const league of config.ingestLeagues) {
+    runs.push(await ingestSeason(season, { ...options, league }));
+  }
+  return runs;
 }

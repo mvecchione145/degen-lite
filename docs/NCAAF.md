@@ -1,44 +1,70 @@
-# College Football (NCAAF) Support — Scope
+# College Football (NCAAF) Support
 
-Status: **proposal, nothing implemented.** This document scopes what it would
-take to run a Spread Sharks pool on college football alongside (or instead of)
-the NFL.
+Status: **implemented.** A pool can be created against either league, and the
+two run side by side in one database.
+
+Enable the second feed with `INGEST_LEAGUES=NFL,NCAAF` (default `NFL`), then
+pick the league when creating a pool. Measured on a live stack: NFL 272 games
+across 18 weeks, NCAAF 946 games across 17.
 
 Every number and defect below was checked against the live ESPN endpoints on
-2026-08-14, not inferred. Where something could not be verified without a
-SharpAPI key it is called out as **unverified**.
+2026-08-14, and the SharpAPI findings against a live free-tier key on
+2026-08-15. Three things the scope got wrong are corrected in
+[What the live key changed](#what-the-live-key-changed).
 
 ## Summary
 
-Provider support is not the obstacle. SharpAPI covers NCAAF on the same free
-tier we already use, and ESPN's college-football scoreboard carries the same
-shape of payload — including pregame spreads and totals — as the NFL one.
+Getting the fixtures was never the obstacle: ESPN's college scoreboard carries
+the same payload shape as the NFL one, pregame spreads and totals included, so
+a college pool is playable on ESPN alone. (SharpAPI turned out not to price the
+league on this key at all — see below.)
 
-The obstacle is that **this codebase has no league dimension.** `games` is keyed
-on `(season, week)` and every read filters on those two columns alone, so
-ingesting a second league into the same table does not produce two boards. It
-produces one board with 115 games on it, and it corrupts the weekly stipend for
-existing NFL pools. Adding the league column is the bulk of the work; pointing
-the ingester at a different URL is the trivial part.
+The obstacle was that **this codebase had no league dimension.** `games` was
+keyed on `(season, week)` and every read filtered on those two columns alone, so
+ingesting a second league into the same table did not produce two boards. It
+produced one board with 115 games on it, and it corrupted the weekly stipend for
+existing NFL pools. The league column was the bulk of the work; pointing the
+ingester at a different URL was the trivial part.
 
-Rough size: **1.5–2.5 days**, most of it in phase 2 and 3.
+## What the live key changed
 
-## What was verified
+The scope was written from SharpAPI's marketing and documentation pages. A live
+free-tier key contradicts them on three points, all of which shaped the build.
 
-### SharpAPI covers NCAAF
+**1. The league slug is lowercase, and the wrong case fails silently.**
+The docs show `league=NCAAF`. The API's own `/leagues` endpoint returns
+`{"id":"ncaaf","display_name":"NCAAF","event_count":579}`. An uppercase
+parameter returns **HTTP 200 with zero rows** — no error, no warning. A feed
+that returns nothing looks exactly like a feed with nothing to say.
 
-| | |
-| --- | --- |
-| League slug | `NCAAF` — `GET /api/v1/odds?league=NCAAF` |
-| Free tier | Included: 12 req/min, 2 books, same as NFL |
-| Markets | `point_spread` and `total_points` both offered |
-| Coverage | ~800+ games/season including bowls and the CFP |
+**2. The free tier does not price college, whatever the marketing says.**
+`/odds?league=ncaaf` returns zero rows for every market, with and without a
+market filter, while `/odds?league=nfl` returns rows on the same key in the same
+minute. `/account` reports `tier: free`, `features: [odds, schedule]`. The
+sportsbook pages advertise NCAAF on the free tier; the key does not deliver it.
 
-`fetchLines()` in `api/src/services/sharp.js` needs no change to fetch it — the
-league is already a parameter (`config.sharp.league`, `SHARP_LEAGUE`).
+**3. The `ncaaf` event feed is not clean.** `/events?league=ncaaf` returns
+entries like `POR Fire @ SEA Storm` (a basketball game), `USC college football
+game @ San Jose St.`, and prop-shaped rows such as `NDSU28 North Dakota St. wins
+by over 27.5 points`. Even with odds access, that feed would need filtering
+before it could be trusted to name a fixture.
+
+**Consequence, and how it is wired:** `NCAAF.sharpPricing` is `false` in
+`api/src/leagues.js`, so the odds job skips the league and says so rather than
+logging a misleading zero. College lines come from ESPN, which prices 98 of 99
+week-1 games. Flipping the flag to `true` is the only change needed if the key
+is ever upgraded — the join is built and the slug is correct.
+
+**Also worth knowing:** SharpAPI names college teams *without* the nickname
+(`"North Carolina"`, `"TCU"`) where ESPN sends `"North Carolina Tar Heels"`.
+The scope assumed a normalised exact match would carry the join as it does for
+the NFL; it would have matched almost nothing. `pairKeys()` now strips the
+trailing nickname for leagues where the fallback is disabled.
 
 Sources: [sharpapi.io/odds/ncaaf](https://sharpapi.io/odds/ncaaf),
-[docs.sharpapi.io](https://docs.sharpapi.io/en).
+[docs.sharpapi.io](https://docs.sharpapi.io/en), and the live key.
+
+## What was verified
 
 ### ESPN carries CFB odds, so SharpAPI stays optional
 
@@ -144,12 +170,38 @@ A wrong match writes another game's spread onto the board — again silent.
 nickname buckets above are the systemic one. **The nickname fallback must be
 disabled for CFB.**
 
+## What was built
+
+| Piece | Where |
+| --- | --- |
+| League registry — schedule shape, ESPN params, matching rules, per-league SharpAPI flag | `api/src/leagues.js` (new) |
+| `league` column on `games` and `pools`, `(league, season, week)` index | `db/init/01-schema.sql` |
+| League-aware ESPN ingest, postseason remap, per-league walk | `api/src/services/ingest.js` |
+| League filter on every board, week, season and pick query | `games.js`, `bets.js`, `picks.js` |
+| League-scoped stipend week | `settlement.js` |
+| Cross-league bet rejected at placement | `bets.js` `loadGame()` |
+| League on pool creation, badge on every pool | `routes/pools.js`, `web/public/app.js` |
+| `INGEST_LEAGUES` for api and worker | `docker-compose.yml` |
+| Registry tests | `api/test/leagues.test.js` |
+
+Verified on a live stack: NFL 272/18 weeks and NCAAF 946/17 weeks ingested side
+by side; NCAAF week 1 holds 99 games and week 17 holds the 44 bowl fixtures;
+each pool's board returns only its own league; a bet posted against another
+league's game id is refused; and with the leagues deliberately on different
+weeks (college pushed to week 2, NFL on week 1) each top-up pool drew its
+stipend for its own league's week.
+
+One thing the scope did not list and the build added: `placeBet` validated the
+game's *season* but not its league, so a game id posted straight to the API
+would have let an NFL pool take a wager on a college game. `loadGame()` now
+checks both.
+
 ## Required changes
 
-### Phase 1 — league dimension (the load-bearing change)
+### Phase 1 — league dimension (the load-bearing change) — **done**
 
-`games` has no league column, and neither does `pools`. Until it does, a second
-league cannot coexist with the first.
+`games` had no league column, and neither did `pools`. Until they did, a second
+league could not coexist with the first.
 
 1. **Schema** (`db/init/01-schema.sql`): add
    `league VARCHAR(10) NOT NULL DEFAULT 'NFL' CHECK (league IN ('NFL','NCAAF'))`
@@ -179,9 +231,10 @@ league cannot coexist with the first.
 Phase 1 alone is worth doing even if CFB never ships — items 3 and the missing
 index are pre-existing weaknesses.
 
-### Phase 2 — CFB ingestion
+### Phase 2 — CFB ingestion — **done**
 
-In `api/src/services/ingest.js`:
+In `api/src/services/ingest.js`. The week list moved into the league registry:
+a caller no longer passes `{ weeks }`, the league says what its season is.
 
 1. Parameterise the scoreboard URL by league instead of the module constant at
    `:11`; append `groups=80&limit=300` for CFB only (`groups` is meaningless to
@@ -199,7 +252,10 @@ Worth noting: at 99 games/week versus 16, the per-week `INSERT` loop in
 `upsertGames()` becomes ~1,600 round trips per full-season ingest. It will work;
 it is a candidate for a multi-row insert if the ingest cron gets tight.
 
-### Phase 3 — SharpAPI join hardening
+### Phase 3 — SharpAPI join hardening — **done, but dormant**
+
+Built and unit-covered, but it does not run: the free tier returns no college
+odds (see above), so `sharpPricing: false` skips the league entirely.
 
 1. **Drop the nickname fallback for CFB.** Exact normalised name only, and let
    unmatched games keep their ESPN line rather than risk a wrong one. Watch
@@ -212,7 +268,12 @@ it is a candidate for a multi-row insert if the ingest cron gets tight.
 3. **Tighten the kickoff window** from ±2 days to ±12 hours. The wide tolerance
    exists to absorb timezone drift on a 16-game slate; on a 60-game Saturday it
    is what turns a nickname collision into a wrong line.
-4. **Pagination is the open risk (unverified).** `fetchAll` caps at
+4. **Pagination is moot for now (was the open risk).** With no college odds on
+   this key there is nothing to paginate. The bound below still applies the day
+   the key is upgraded, and `feed.truncated` is surfaced in the worker log line
+   so it cannot pass unnoticed.
+
+   Original note: `fetchAll` caps at
    `maxPages = 8 × 200 rows`, and the offset path stops at `MAX_OFFSET = 500`
    (~700 rows) when SharpAPI returns no cursor. NCAAF returns roughly 5× the NFL
    row count per market before alternate lines are counted, and `/odds` returns
@@ -225,9 +286,10 @@ apart by `throttle()` = ~80s per refresh, inside the `*/5 * * * *` odds cron.
 Running both leagues doubles that to ~160s — still inside the window, but the
 throttle is per-process and shared, so the margin narrows.
 
-### Phase 4 — surface
+### Phase 4 — surface — **partly done**
 
-- League selector on pool creation, and a league badge on the pool header.
+- ~~League selector on pool creation, and a league badge on the pool header.~~
+  Done.
 - The board renders 99 games in one flat list. The NFL's 16 fit; a CFB Saturday
   does not. Grouping by kickoff window (or filtering to ranked/conference games)
   is a UX question worth settling before launch, not after.
@@ -235,20 +297,22 @@ throttle is per-process and shared, so the margin narrows.
   happens to be correct for CFB as well, so it can stay — but the name becomes a
   lie. Rename to `currentFootballSeason()`.
 
-## Decisions needed
+## Decisions taken
 
-1. **One league at a time, or both at once?** A single `LEAGUE` env var that
+1. **Both at once.** ~~One league at a time, or both?~~ A single `LEAGUE` env var that
    switches the whole stack is roughly half the work — no per-pool league, no
    mixed-table hazards, phase 1 shrinks to a config change. Running both
-   simultaneously is what forces the full schema change. *Recommendation: build
-   phase 1 properly anyway; the stipend bug and the missing index justify it,
-   and a config-only switch would have to be undone later.*
-2. **FBS only, or FBS + FCS?** `groups=80` is FBS. FCS games drag in most of the
-   230-team name-collision surface for games nobody is pricing.
-   *Recommendation: FBS only.*
-3. **Does the postseason belong in a pool at all?** Bowls spanning Dec 14 →
-   Jan 20 as a single "week 17" is a strange board. It may be cleaner to end CFB
-   pools at week 16 in v1.
+   simultaneously is what forces the full schema change. Built the full version:
+   the stipend bug and the missing index justified it on their own, and a
+   config-only switch would have had to be undone later. `INGEST_LEAGUES`
+   controls which feeds run; the schema supports both regardless.
+2. **FBS only.** `groups=80` is FBS; FCS would drag in most of the 230-team
+   name-collision surface for games nobody is pricing.
+3. **The postseason is ingested as week 17 — still open as a product question.**
+   44 bowl games spanning mid-December to January on a single board is strange,
+   and nothing stops a pool from running it. Capping college pools at week 16
+   remains a reasonable v1 call; it would be a change in the week list, not the
+   schema.
 
 ## Test plan
 
@@ -256,14 +320,21 @@ throttle is per-process and shared, so the margin narrows.
   `npm test` from `api/`. Covers the punctuated college abbreviations, the NFL
   strings as a regression guard, and the unparseable inputs that must fall
   through to `0`.
-- Ingest 2025 CFB weeks 1, 15, 16 and postseason into a clean volume; assert
-  96/9/1/46 rows land on weeks 1/15/16/17 with `league = 'NCAAF'`.
-- With an NFL demo pool and a CFB pool in the same season, assert each board
-  returns only its own league's games, and that a TOPUP pool grants exactly one
-  stipend for its own league's current week.
-- With a live SharpAPI key: run `applySharpLines('NCAAF')` and check
-  `unmatched`, `truncated`, and `events_priced` against the ESPN slate size.
-  Any `truncated: true` invalidates the pagination assumption above.
+- ~~Registry week shapes~~ — done: `api/test/leagues.test.js` pins the 18-week
+  NFL walk, the 16+postseason college walk, the week-17 remap, `groups=80`, the
+  disabled nickname fallback, and the lowercase SharpAPI slugs.
+- ~~Ingest both leagues into a clean volume~~ — done on a live stack:
+  NFL 272 games/18 weeks, NCAAF 946/17. College week 1 = 99 games, week 17 = 44
+  bowl fixtures, all `league = 'NCAAF'`.
+- ~~Board scoping and stipends~~ — done: an NFL pool returns 16 games and a
+  college pool 99 for the same week, each only its own league. With college
+  pushed to week 2 and the NFL on week 1, each top-up pool drew a stipend for
+  its own league's week.
+- ~~Cross-league bet~~ — done: posting a college game id to an NFL pool returns
+  `That game is not in this pool's league (NFL)`.
+- **Still untested: the SharpAPI college join.** It cannot run — the key returns
+  no college odds. `pairKeys()`'s nickname-stripping is covered by reasoning and
+  the ESPN/Sharp name shapes observed, not by a live match.
 
 ## Files touched
 

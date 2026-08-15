@@ -56,7 +56,7 @@ export async function getBalanceSummary(pool, userId) {
     // out, so a rebuy never reads as profit.
     net_profit: Number((balance + atRisk - credited).toFixed(2)),
     minimum_bet: effectiveMinimum(pool),
-    max_bet_per_game: pool.max_bet_per_game === null ? null : Number(pool.max_bet_per_game),
+    max_bet: pool.max_bet === null ? null : Number(pool.max_bet),
     rebuys_used: row.rebuys_used ?? 0,
     rebuy_limit: pool.rebuy_limit,
     bust_policy: pool.bust_policy,

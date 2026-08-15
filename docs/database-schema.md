@@ -59,11 +59,11 @@ CREATE TABLE pools (
     pool_type VARCHAR(30) NOT NULL
         CHECK (pool_type IN ('SPREAD_SHARKS', 'PICKEM', 'CONFIDENCE', 'SURVIVOR')),
     use_spreads BOOLEAN NOT NULL DEFAULT FALSE,   -- legacy modes only
-    is_public BOOLEAN NOT NULL DEFAULT FALSE,
+    leagues VARCHAR(10)[] NOT NULL DEFAULT ARRAY['NFL']::VARCHAR(10)[],
     season INT NOT NULL,
 
-    starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 10000.00,
-    max_bet_per_game NUMERIC(14, 2),              -- NULL = uncapped
+    starting_balance NUMERIC(14, 2) NOT NULL DEFAULT 20000.00,
+    max_bet NUMERIC(14, 2),                       -- per wager; NULL = uncapped
     min_bet NUMERIC(14, 2),                       -- NULL = the 1.00 floor only
     bust_policy VARCHAR(20) NOT NULL DEFAULT 'ELIMINATE'
         CHECK (bust_policy IN ('ELIMINATE', 'TOPUP', 'REBUY')),

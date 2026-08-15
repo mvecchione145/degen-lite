@@ -11,11 +11,12 @@ function bool(value, fallback) {
   return value === 'true' || value === '1';
 }
 
-// An NFL season kicks off in September and runs into the following January, so
-// anything before March still belongs to the previous year's season. The
-// bootstrap SQL derives it the same way, so pools and the ingested schedule
-// agree on which season they are talking about.
-export function currentNflSeason(now = new Date()) {
+// A football season kicks off in the autumn and runs into the following
+// January, so anything before March still belongs to the previous year's
+// season. True of both leagues we carry: the NFL runs September–February and
+// college runs late August–January. The bootstrap SQL derives it the same way,
+// so pools and the ingested schedule agree on which season they mean.
+export function currentFootballSeason(now = new Date()) {
   const year = now.getFullYear();
   return now.getMonth() >= 2 ? year : year - 1;
 }
@@ -41,13 +42,19 @@ export const config = {
   // There is no synthetic fallback any more: without ingestion the app has no
   // games at all, so this is on by default.
   ingestEnabled: bool(process.env.INGEST_ENABLED, true),
-  ingestSeason: num(process.env.INGEST_SEASON, currentNflSeason()),
+  ingestSeason: num(process.env.INGEST_SEASON, currentFootballSeason()),
+  // Which leagues the worker pulls. Every extra league is another full walk of
+  // ESPN's scoreboard on each tick, so this is opt-in rather than everything.
+  ingestLeagues: (process.env.INGEST_LEAGUES || 'NFL')
+    .split(',').map((l) => l.trim().toUpperCase()).filter(Boolean),
 
   // SharpAPI (sharpapi.io) supplies lines. Note this is a different product
   // from sharpapi.com, which is an unrelated AI workflow API.
   sharp: {
     apiKey: process.env.SHARP_API_KEY || '',
     baseUrl: process.env.SHARP_API_BASE || 'https://api.sharpapi.io/api/v1',
+    // The per-league slug lives in leagues.js now; SHARP_LEAGUE remains only so
+    // an existing compose file does not silently change behaviour.
     league: process.env.SHARP_LEAGUE || 'nfl',
     // Preference order when several sportsbooks price the same game. The free
     // tier serves two books.
