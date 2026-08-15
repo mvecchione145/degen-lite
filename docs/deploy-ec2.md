@@ -108,7 +108,17 @@ sudo mkdir -p /usr/local/lib/docker/cli-plugins
 sudo curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# compose v2 builds through buildx and refuses to run without a recent one.
+# AL2023 does not package it, and the asset name embeds the version, so there
+# is no latest/download shortcut.
+BUILDX_VERSION=v0.36.1
+sudo curl -SL "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-arm64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-buildx
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+
 docker compose version
+docker buildx version
 ```
 
 On a `t4g.micro`, add swap first or the image build will be OOM-killed:
