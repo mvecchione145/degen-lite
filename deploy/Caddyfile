@@ -1,0 +1,39 @@
+# Caddy sits in front of the nginx container and terminates TLS.
+#
+# SITE_ADDRESS comes from the environment (see docker-compose.prod.yml):
+#   app.example.com  → automatic Let's Encrypt certificate, HTTP redirected
+#   :80              → plain HTTP, for testing against a raw IP before DNS
+#
+# nginx still owns /api proxying and the SPA fallback, so this file stays a
+# thin edge: TLS, compression, and a few headers.
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# The app container is `web` on the compose network. Not published to the
+	# host at all — this is the only way in.
+	reverse_proxy web:80
+
+	header {
+		# The app is same-origin end to end: nginx proxies /api itself, and the
+		# page loads no third-party scripts, styles, fonts, or images.
+		#
+		# style-src needs 'unsafe-inline' because the UI is rendered from
+		# template literals carrying ~35 inline style= attributes; CSP counts
+		# those as inline styles and drops them without it, which silently
+		# wrecks the layout. script-src stays strict — index.html loads app.js
+		# as an external module and there are no inline scripts or on* handlers.
+		# img-src allows data: for the emoji favicon.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Only meaningful over HTTPS; harmless on the :80 testing path.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
