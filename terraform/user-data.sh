@@ -19,13 +19,24 @@ systemctl enable --now docker
 # login, which a fresh SSM session is.
 usermod -aG docker ec2-user
 
-# The compose plugin is not in the AL2023 repositories. aarch64 to match the
-# Graviton instance type.
+# Neither the compose nor the buildx plugin is in the AL2023 repositories.
+# aarch64/arm64 to match the Graviton instance type.
 install -d /usr/local/lib/docker/cli-plugins
+
 curl -fsSL \
   "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-aarch64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# compose v2 delegates every build to buildx and refuses to run without a
+# recent one ("compose build requires buildx 0.17.0 or later"). The release
+# asset embeds its version, so unlike compose there is no latest/download
+# shortcut — this pin has to be bumped by hand.
+BUILDX_VERSION="v0.36.1"
+curl -fsSL \
+  "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-arm64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-buildx
+chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # Swap, so a 1 GB t4g.micro can build images without the OOM killer. Harmless
 # on larger instances.
