@@ -4,11 +4,16 @@
 -- from real feeds — the schedule and results from ESPN, the lines from SharpAPI
 -- — pulled by the worker on startup. See docs/data-sources.md.
 --
--- What remains is the minimum needed to sign in and see the board:
--- four accounts and one empty pool. Delete this file to start with nothing at
--- all; the application creates everything else through the API.
+-- What remains is the minimum needed to sign in and see the board: one account,
+-- no pools. Delete this file to start with nothing at all; the application
+-- creates everything else through the API.
 --
--- Accounts: alice / bob / carol / dave, all with password `password123`.
+-- Account: admin / admin@degenlite.com, password `password123`.
+--
+-- These statements only ever run against an empty data directory — Postgres
+-- skips /docker-entrypoint-initdb.d entirely once the volume holds a database.
+-- Editing this file therefore does nothing to a running stack until the volume
+-- is removed (docker compose down && docker volume rm leaguepicks_pgdata).
 
 INSERT INTO users (username, email, password_hash) VALUES
     ('admin', 'admin@degenlite.com', crypt('password123', gen_salt('bf')));
