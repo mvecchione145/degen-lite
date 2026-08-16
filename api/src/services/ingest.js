@@ -66,6 +66,8 @@ function toGameRow(event, { leagueId, season, week }) {
     week,
     home_team: home.team?.displayName ?? 'Home',
     away_team: away.team?.displayName ?? 'Away',
+    home_team_abbr: home.team?.abbreviation ?? null,
+    away_team_abbr: away.team?.abbreviation ?? null,
     kickoff_time: new Date(event.date).toISOString(),
     spread: homeSpread(competition?.odds?.[0], home.team?.abbreviation),
     // No posted total means the total market is simply not offered on this game.
@@ -87,11 +89,15 @@ async function upsertGames(rows) {
   for (const row of rows) {
     await query(
       `INSERT INTO games (id, league, season, week, home_team, away_team,
+                          home_team_abbr, away_team_abbr,
                           kickoff_time, spread, total, home_score, away_score,
                           status, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+       VALUES ($1, $2, $3, $4, $5, $6, $14, $15, $7, $8, $9, $10, $11, $12,
+               CURRENT_TIMESTAMP)
        ON CONFLICT (id) DO UPDATE
           SET week = EXCLUDED.week,
+              home_team_abbr = COALESCE(EXCLUDED.home_team_abbr, games.home_team_abbr),
+              away_team_abbr = COALESCE(EXCLUDED.away_team_abbr, games.away_team_abbr),
               kickoff_time = EXCLUDED.kickoff_time,
               spread = CASE WHEN $13 THEN games.spread ELSE EXCLUDED.spread END,
               total = CASE WHEN $13 THEN games.total
@@ -102,7 +108,7 @@ async function upsertGames(rows) {
               updated_at = CURRENT_TIMESTAMP`,
       [row.id, row.league, row.season, row.week, row.home_team, row.away_team,
         row.kickoff_time, row.spread, row.total, row.home_score, row.away_score,
-        row.status, sharpOwnsLines],
+        row.status, sharpOwnsLines, row.home_team_abbr, row.away_team_abbr],
     );
     count += 1;
   }

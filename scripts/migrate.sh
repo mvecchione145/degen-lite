@@ -60,6 +60,11 @@ report() {
     SELECT 'users.avatar_emoji        : ' || CASE WHEN EXISTS (
       SELECT 1 FROM information_schema.columns
        WHERE table_name = 'users' AND column_name = 'avatar_emoji'
+    ) THEN 'present' ELSE 'MISSING' END
+    UNION ALL
+    SELECT 'games team abbreviations  : ' || CASE WHEN EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'games' AND column_name = 'home_team_abbr'
     ) THEN 'present' ELSE 'MISSING' END;"
 }
 
@@ -102,6 +107,13 @@ ALTER TABLE pool_events ADD CONSTRAINT pool_events_kind_check
 -- One emoji beside the name on leaderboards.
 ALTER TABLE users
   ADD COLUMN IF NOT EXISTS avatar_emoji VARCHAR(24);
+
+-- The feed's own team abbreviations, for the board on a narrow screen. Existing
+-- rows stay NULL until the next ingest refreshes them, and the UI falls back to
+-- the full name until then.
+ALTER TABLE games
+  ADD COLUMN IF NOT EXISTS home_team_abbr VARCHAR(8),
+  ADD COLUMN IF NOT EXISTS away_team_abbr VARCHAR(8);
 
 COMMIT;
 SQL

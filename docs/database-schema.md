@@ -139,6 +139,8 @@ CREATE TABLE games (
     week INT NOT NULL,
     home_team VARCHAR(50) NOT NULL,
     away_team VARCHAR(50) NOT NULL,
+    home_team_abbr VARCHAR(8),                  -- NE, SEA, TCU, NCSU
+    away_team_abbr VARCHAR(8),
     kickoff_time TIMESTAMP WITH TIME ZONE NOT NULL,
     spread NUMERIC(4, 1) NOT NULL DEFAULT 0.0,  -- the home team's line
     total NUMERIC(4, 1),                        -- NULL = no total offered
@@ -149,6 +151,15 @@ CREATE TABLE games (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+The abbreviations come from the feed rather than being derived from the display
+name. Deriving looked cheaper and is wrong too often to use: the school name is
+frequently already an acronym, so "TCU Horned Frogs" reduces to TH and "UNLV
+Rebels" to UNL, and a two-word nickname defeats any single-word strip — "North
+Carolina Tar Heels" gives NCT rather than UNC. ESPN publishes the canonical one
+per team for both leagues, and the ingester was already reading it to parse the
+spread. NULL on rows ingested before the column existed; the next ingest fills
+them, and the board falls back to the full name meanwhile.
 
 There are **no price columns**. While every market is priced −110 the price is a
 constant, not data.

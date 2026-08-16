@@ -226,33 +226,28 @@ test('hostile team names cannot escape the pool history table', () => {
 // Short team names, issue #13. The board puts a team beside its line and price
 // in one button; at full length that overflows a phone, so both forms are in
 // the markup and CSS picks one.
-test('NFL teams abbreviate to the form people actually read', () => {
-  const shortTeam = new Function(
-    `${extractConst('NFL_ABBR')} ${extractFunction('shortTeam')} return shortTeam;`,
-  )();
-  assert.equal(shortTeam('New England Patriots'), 'NE');
-  assert.equal(shortTeam('Seattle Seahawks'), 'SEA');
-  assert.equal(shortTeam('San Francisco 49ers'), 'SF');
-  assert.equal(shortTeam('Los Angeles Rams'), 'LAR');
-  assert.equal(shortTeam('Los Angeles Chargers'), 'LAC');
+test('the feed\'s own abbreviation is used when there is one', () => {
+  const shortTeam = new Function(`${extractFunction('shortTeam')} return shortTeam;`)();
+  assert.equal(shortTeam('New England Patriots', 'NE'), 'NE');
+  assert.equal(shortTeam('TCU Horned Frogs', 'TCU'), 'TCU');
+  assert.equal(shortTeam('North Carolina Tar Heels', 'UNC'), 'UNC');
+  assert.equal(shortTeam('NC State Wolfpack', 'NCSU'), 'NCSU');
 });
 
-// College has 230-odd teams and no agreed abbreviation, so anything unmapped is
-// derived rather than left at full length.
-test('unmapped teams derive a short name', () => {
-  const shortTeam = new Function(
-    `${extractConst('NFL_ABBR')} ${extractFunction('shortTeam')} return shortTeam;`,
-  )();
-  assert.equal(shortTeam('Ohio State Buckeyes'), 'OS');
-  // A two-word nickname cannot be spotted without a team list, so this gives
-  // NCT rather than the canonical UNC. Pinned so the derivation is at least
-  // stable — the same fixture must not abbreviate two different ways.
-  assert.equal(shortTeam('North Carolina Tar Heels'), 'NCT');
-  // A single-word school keeps letters rather than becoming one initial.
-  assert.equal(shortTeam('Alabama Crimson'), 'ALA');
-  // "Army" is the whole name, not a nickname — never strip it to nothing.
-  assert.equal(shortTeam('Army'), 'ARM');
-  assert.equal(shortTeam(''), '');
+// The fallback only runs for rows ingested before the column existed. It is
+// pinned because it is visibly imperfect — deriving a short name from a display
+// name cannot recover TCU from "TCU Horned Frogs" — and the point of these
+// assertions is that it stays predictable, not that it is right.
+test('without one, a short name is derived and stays stable', () => {
+  const shortTeam = new Function(`${extractFunction('shortTeam')} return shortTeam;`)();
+  assert.equal(shortTeam('New England Patriots', null), 'NE');
+  assert.equal(shortTeam('Seattle Seahawks', null), 'SEA');
+  assert.equal(shortTeam('Ohio State Buckeyes', null), 'OS');
+  assert.equal(shortTeam('Army', null), 'ARM');
+  assert.equal(shortTeam('', null), '');
+  // Why the stored abbreviation is worth a column: these are the wrong answers.
+  assert.equal(shortTeam('TCU Horned Frogs', null), 'TH');
+  assert.equal(shortTeam('North Carolina Tar Heels', null), 'NCT');
 });
 
 // Issue #14: the quick filters set the controls below them, so a chip that

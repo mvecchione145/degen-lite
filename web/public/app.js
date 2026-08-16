@@ -571,55 +571,20 @@ function balanceStrip(balance, pool, standing) {
 // ("New England Patriots") that overflows a phone, so the markup carries both
 // forms and CSS picks one at the breakpoint — no resize listener, and no
 // guessing the viewport in JS.
-const NFL_ABBR = {
-  'Arizona Cardinals': 'ARI',
-  'Atlanta Falcons': 'ATL',
-  'Baltimore Ravens': 'BAL',
-  'Buffalo Bills': 'BUF',
-  'Carolina Panthers': 'CAR',
-  'Chicago Bears': 'CHI',
-  'Cincinnati Bengals': 'CIN',
-  'Cleveland Browns': 'CLE',
-  'Dallas Cowboys': 'DAL',
-  'Denver Broncos': 'DEN',
-  'Detroit Lions': 'DET',
-  'Green Bay Packers': 'GB',
-  'Houston Texans': 'HOU',
-  'Indianapolis Colts': 'IND',
-  'Jacksonville Jaguars': 'JAX',
-  'Kansas City Chiefs': 'KC',
-  'Las Vegas Raiders': 'LV',
-  'Los Angeles Chargers': 'LAC',
-  'Los Angeles Rams': 'LAR',
-  'Miami Dolphins': 'MIA',
-  'Minnesota Vikings': 'MIN',
-  'New England Patriots': 'NE',
-  'New Orleans Saints': 'NO',
-  'New York Giants': 'NYG',
-  'New York Jets': 'NYJ',
-  'Philadelphia Eagles': 'PHI',
-  'Pittsburgh Steelers': 'PIT',
-  'San Francisco 49ers': 'SF',
-  'Seattle Seahawks': 'SEA',
-  'Tampa Bay Buccaneers': 'TB',
-  'Tennessee Titans': 'TEN',
-  'Washington Commanders': 'WAS',
-};
 
-// College has 230-odd teams and no abbreviation anyone agrees on, so the map
-// covers the NFL — where the short forms are the ones people actually read —
-// and everything else is derived. Drop the trailing nickname, then take
-// initials from a multi-word school ("Ohio State" -> OS) or the first three
-// letters of a single-word one ("Alabama" -> ALA).
+// The board shows a team beside its line and price. Prefer the abbreviation the
+// feed publishes — ESPN gives the canonical one per team, both leagues.
 //
-// A two-word nickname is not detectable without a team list, so "North Carolina
-// Tar Heels" gives NCT rather than the canonical UNC. Short and stable beats
-// canonical here: the derived form only has to fit the button and stay the same
-// every time the fixture appears.
-function shortTeam(name) {
-  const full = String(name ?? '');
-  if (NFL_ABBR[full]) return NFL_ABBR[full];
+// Deriving it from the display name looked cheaper and is wrong too often to
+// use: the school name is frequently already an acronym, so "TCU Horned Frogs"
+// reduces to TH and "UNLV Rebels" to UNL, and a two-word nickname defeats any
+// single-word strip ("North Carolina Tar Heels" -> NCT, not UNC). This remains
+// only as a fallback for rows ingested before the column existed, which the
+// next ingest refreshes.
+function shortTeam(name, abbr) {
+  if (abbr) return abbr;
 
+  const full = String(name ?? '');
   const words = full.trim().split(/\s+/);
   // "Army" is the whole name, not a nickname — never strip to nothing.
   const school = words.length > 1 ? words.slice(0, -1) : words;
@@ -628,15 +593,18 @@ function shortTeam(name) {
 }
 
 // Both forms, for anywhere the full name will not fit on a phone.
-const teamLabel = (name) => `<span class="team-long">${esc(name)}</span>`
-  + `<span class="team-short">${esc(shortTeam(name))}</span>`;
+const teamLabel = (name, abbr) => `<span class="team-long">${esc(name)}</span>`
+  + `<span class="team-short">${esc(shortTeam(name, abbr))}</span>`;
 
 function marketButton(game, market, selection, board) {
   const line = market === 'SPREAD'
     ? (selection === 'HOME' ? game.spread : -game.spread)
     : game.total;
   const label = market === 'SPREAD'
-    ? teamLabel(selection === 'HOME' ? game.home_team : game.away_team)
+    ? teamLabel(
+      selection === 'HOME' ? game.home_team : game.away_team,
+      selection === 'HOME' ? game.home_team_abbr : game.away_team_abbr,
+    )
     : esc(selection === 'OVER' ? 'Over' : 'Under');
   const display = market === 'SPREAD' ? fmtLine(line) : line;
 
@@ -777,7 +745,8 @@ function boardGame(game, board) {
   return `
     <div class="game${game.locked ? ' locked' : ''}">
       <div class="game-meta">
-        <span>${teamLabel(game.away_team)} @ ${teamLabel(game.home_team)}</span>
+        <span>${teamLabel(game.away_team, game.away_team_abbr)}
+          @ ${teamLabel(game.home_team, game.home_team_abbr)}</span>
         <span>
           ${scored ? `${game.away_score} – ${game.home_score} · ` : ''}
           ${game.status === 'VOID' ? '<span class="badge red">Void</span>'

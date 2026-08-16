@@ -206,7 +206,8 @@ export async function getBoard({ poolId, userId, league, week }) {
   const boardLeague = assertPoolLeague(pool, league);
 
   const { rows: games } = await query(
-    `SELECT id, league, season, week, home_team, away_team, kickoff_time,
+    `SELECT id, league, season, week, home_team, away_team,
+            home_team_abbr, away_team_abbr, kickoff_time,
             spread, total, home_score, away_score, status,
             (kickoff_time <= CURRENT_TIMESTAMP) AS locked
        FROM games
