@@ -271,6 +271,34 @@ test('quick filters only offer weeks that exist', () => {
   assert.deepEqual(labels('', 5), ['This week', 'Last week']);
 });
 
+// A pool can play a league whose schedule has not been ingested. That league
+// has no current week and no week list, so the resolved week is undefined —
+// and interpolated into a query string, undefined becomes the literal text
+// "undefined", which the week parameter rejects as NaN. The board then failed
+// with "Expected number, received nan" instead of showing an empty slate.
+test('a week that does not exist is normalised to null, not "undefined"', () => {
+  const resolve = (requestedWeek, view) => {
+    const resolvedWeek = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+    return Number.isFinite(Number(resolvedWeek)) ? Number(resolvedWeek) : null;
+  };
+  const empty = { current_week: null, weeks: [] };
+  const loaded = { current_week: 3, weeks: [{ week: 1 }] };
+
+  assert.equal(resolve(null, empty), null, 'a league with no schedule');
+  assert.equal(resolve(undefined, empty), null);
+  assert.equal(resolve(null, loaded), 3, 'falls back to the current week');
+  assert.equal(resolve(7, loaded), 7, 'an explicit week wins');
+  assert.equal(resolve(null, { current_week: null, weeks: [{ week: 5 }] }), 5);
+});
+
+// The query string must omit the parameter rather than send a placeholder.
+test('the board query omits week when there is none', () => {
+  const url = (league, week) => `/pools/p1/board?league=${league}`
+    + (week == null ? '' : `&week=${week}`);
+  assert.equal(url('NCAAF', null), '/pools/p1/board?league=NCAAF');
+  assert.equal(url('NFL', 1), '/pools/p1/board?league=NFL&week=1');
+});
+
 test('esc() covers the five characters that matter', () => {
   const esc = new Function(`${realEsc()} return esc;`)();
   assert.equal(esc('<'), '&lt;');

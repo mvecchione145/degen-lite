@@ -1201,7 +1201,8 @@ async function renderSharksPool(detail, week) {
   const leagues = detail.pool.leagues ?? ['NFL'];
   const isCommish = Boolean(detail.is_commissioner);
   const [board, leaderboard, log, pending] = await Promise.all([
-    api(`/pools/${poolId}/board?league=${league}&week=${week}`),
+    api(`/pools/${poolId}/board?league=${league}`
+      + (week == null ? '' : `&week=${week}`)),
     api(`/pools/${poolId}/leaderboard`),
     api(`/pools/${poolId}/events`),
     // Only the commissioner may read this, so only they ask for it.
@@ -1213,7 +1214,11 @@ async function renderSharksPool(detail, week) {
     && balance.rebuys_used < (pool.rebuy_limit ?? 0);
 
   const paintBoard = () => {
-    app.querySelector('#board').innerHTML = board.games
+    // Absent when the league has no schedule ingested — the card shows an
+    // explanation instead of a slate, and there is nothing to paint.
+    const host = app.querySelector('#board');
+    if (!host) return;
+    host.innerHTML = board.games
       .map((game) => boardGame(game, board)).join('');
     wireBoard();
     app.querySelector('#slip-stake')?.focus();
@@ -1325,8 +1330,8 @@ async function renderSharksPool(detail, week) {
 
     <div class="card" data-panel="board" ${state.tab === 'board' ? '' : 'hidden'}>
       <div class="row-between" style="margin-bottom:12px;">
-        <h2 style="margin:0">Week ${week}</h2>
-        ${state.devTools
+        <h2 style="margin:0">${week == null ? 'No schedule yet' : `Week ${week}`}</h2>
+        ${state.devTools && week != null
     ? '<button data-action="simulate" title="Development only: fabricate final scores for this week">Simulate results</button>'
     : ''}
       </div>
@@ -1338,12 +1343,20 @@ async function renderSharksPool(detail, week) {
               ${esc(LEAGUE_LABELS[id] ?? id)}
             </button>`).join('')}
         </div>
-        <p class="muted small" style="margin:0 0 10px">
-          Each league keeps its own week numbering — ${esc(LEAGUE_LABELS[league] ?? league)}
-          week ${week} here.
-        </p>` : ''}
-      <div data-week-nav>${weekNav(detail.weeks, week, poolId, league)}</div>
-      <div id="board"></div>
+        ${week == null ? '' : `
+          <p class="muted small" style="margin:0 0 10px">
+            Each league keeps its own week numbering — ${esc(LEAGUE_LABELS[league] ?? league)}
+            week ${week} here.
+          </p>`}` : ''}
+      ${week == null ? `
+        <p class="muted">
+          No ${esc(LEAGUE_LABELS[league] ?? league)} games have been ingested for
+          season ${pool.season} yet, so there is nothing to bet on here. The
+          worker pulls each league listed in INGEST_LEAGUES — check that this one
+          is among them, and give it a minute after it starts.
+        </p>` : `
+        <div data-week-nav>${weekNav(detail.weeks, week, poolId, league)}</div>
+        <div id="board"></div>`}
     </div>
 
     <div class="card" data-panel="bets" ${state.tab === 'bets' ? '' : 'hidden'}>
@@ -1882,7 +1895,13 @@ async function renderPool(poolId, requestedLeague, requestedWeek) {
   const view = detail.by_league?.[league] ?? {
     current_week: detail.current_week, weeks: detail.weeks,
   };
-  const week = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+  // A league the pool plays but whose schedule has not been ingested has no
+  // current week and no week list, so this lands on undefined. Normalising to
+  // null here matters: interpolated into a query string, undefined becomes the
+  // literal text "undefined", which the week parameter rejects as NaN — the
+  // board then fails with a validation error instead of showing an empty slate.
+  const resolvedWeek = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+  const week = Number.isFinite(Number(resolvedWeek)) ? Number(resolvedWeek) : null;
   detail.league = league;
   detail.weeks = view.weeks;
   detail.current_week = view.current_week;
