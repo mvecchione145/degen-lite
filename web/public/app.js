@@ -136,11 +136,88 @@ function renderFooter() {
   footer.innerHTML = `<span class="muted small">LeaguePicks · build ${body}</span>`;
 }
 
+// A curated grid rather than a free-text box or the OS emoji keyboard. The
+// server accepts any emoji, but most people want to pick one in two clicks,
+// and a grid cannot produce the input the validator has to reject.
+const AVATAR_CHOICES = [
+  '🦈', '🐐', '🔥', '🎲', '🍀', '💎', '🚀', '👑',
+  '🏈', '🏆', '⚡', '🧊', '🐺', '🦅', '🐍', '🦍',
+  '🤖', '👻', '🤠', '🥶', '😎', '🤡', '💀', '🧠',
+];
+
+function openAvatarPicker() {
+  const current = state.user?.avatar_emoji ?? null;
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal';
+  dialog.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Choose your emoji">
+      <div class="row-between" style="margin-bottom:12px">
+        <h2 style="margin:0">Your emoji</h2>
+        <button class="ghost" data-close>Close</button>
+      </div>
+      <p class="muted small" style="margin:0 0 12px">
+        Shown beside your name on every leaderboard.
+      </p>
+      <div class="avatar-grid">
+        ${AVATAR_CHOICES.map((e) => `
+          <button class="avatar-option" data-emoji="${esc(e)}"
+                  aria-pressed="${e === current}">${e}</button>`).join('')}
+      </div>
+      <div class="row-between" style="margin-top:14px">
+        <button data-clear ${current ? '' : 'disabled'}>Remove emoji</button>
+      </div>
+    </div>`;
+
+  const close = () => dialog.remove();
+
+  async function choose(emoji) {
+    try {
+      const { user } = await api('/auth/avatar', {
+        method: 'POST',
+        body: { avatar_emoji: emoji },
+      });
+      state.user = user;
+      renderTopbar();
+      close();
+      // The leaderboard is rendered from a cached payload that now carries a
+      // stale emoji, so redraw whatever is on screen.
+      await render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+
+  dialog.addEventListener('click', (event) => {
+    // Clicking the backdrop dismisses; clicking the card must not.
+    if (event.target === dialog || event.target.closest('[data-close]')) return close();
+    const option = event.target.closest('[data-emoji]');
+    if (option) return choose(option.dataset.emoji);
+    if (event.target.closest('[data-clear]')) return choose(null);
+    return undefined;
+  });
+
+  document.addEventListener('keydown', function onKey(event) {
+    if (event.key !== 'Escape') return;
+    document.removeEventListener('keydown', onKey);
+    close();
+  });
+
+  document.body.appendChild(dialog);
+}
+
 function renderTopbar() {
   topbarActions.innerHTML = state.user
-    ? `<span class="muted small">${esc(state.user.username)}</span>
+    ? `<button class="avatar-pick" data-action="avatar"
+               title="Choose the emoji shown beside your name">
+         <span class="avatar">${esc(state.user.avatar_emoji || '🙂')}</span>
+         <span class="muted small">${esc(state.user.username)}</span>
+       </button>
        <button class="ghost" data-action="logout">Sign out</button>`
     : '';
+
+  topbarActions.querySelector('[data-action="avatar"]')
+    ?.addEventListener('click', openAvatarPicker);
 
   // Local only: drops the token from this browser. The token itself stays valid
   // until it expires. Invalidating it everywhere is still possible through
@@ -819,6 +896,7 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
             <tr class="${row.user_id === currentUserId ? 'me' : ''}">
               <td class="num">${row.rank}</td>
               <td class="${row.is_eliminated ? 'eliminated' : ''}">
+                ${row.avatar_emoji ? `<span class="avatar">${esc(row.avatar_emoji)}</span>` : ''}
                 ${esc(row.username)}
                 ${row.is_eliminated ? '<span class="badge red">Bust</span>' : ''}
                 ${row.rebuys_used > 0 ? `<span class="badge grey">${row.rebuys_used}× rebuy</span>` : ''}

@@ -251,5 +251,5 @@ having anywhere to send them.
 
 Schema: `pool_members.withdrawn_at` and the `pool_events` table. There is no
 migration runner, so an existing database needs
-`./scripts/migrate-commissioner-controls.sh`; a fresh volume picks both up from
+`./scripts/migrate.sh`; a fresh volume picks both up from
 `db/init` directly.

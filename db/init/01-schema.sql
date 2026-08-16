@@ -22,6 +22,11 @@ CREATE TABLE users (
     -- session, since a signed token is otherwise valid until it expires.
     -- Raised on a password change and by "sign out everywhere".
     token_version INT NOT NULL DEFAULT 0,
+    -- One emoji, shown beside the name on leaderboards. Per account rather than
+    -- per pool: it is who you are, not how you play in one league. Wide enough
+    -- for a ZWJ sequence or a flag, which are several code points each; NULL
+    -- means the member has not picked one and the UI shows nothing.
+    avatar_emoji VARCHAR(24),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

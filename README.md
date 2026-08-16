@@ -61,7 +61,7 @@ docker compose down -v && ./scripts/compose.sh up -d   # needs a fresh season
 node scripts/smoke-test.mjs
 ```
 
-145 checks covering auth, placement rules, the per-selection cap, settlement
+151 checks covering auth, placement rules, the per-selection cap, settlement
 arithmetic to the cent, voids, bust policies, commissioner controls, leaderboard
 caching, and the live odds feed.
 

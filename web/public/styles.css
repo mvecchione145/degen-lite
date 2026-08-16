@@ -405,3 +405,56 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .footer a { color: var(--muted); text-decoration: none; font-variant-numeric: tabular-nums; }
 .footer a:hover { color: var(--accent); text-decoration: underline; }
+
+/* Emoji avatar. Sized in em so it tracks whatever text it sits beside, and
+   given an explicit emoji font stack so it renders as colour glyphs rather
+   than falling back to a monochrome outline on Linux. */
+.avatar {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 1.05em;
+  line-height: 1;
+  margin-right: 2px;
+}
+
+.avatar-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 8px;
+}
+.avatar-pick:hover:not(:disabled) { border-color: var(--border); }
+
+/* Backdrop covers the sticky topbar, which sits at z-index 10. */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, .6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.avatar-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+.avatar-grid button {
+  font-size: 22px;
+  line-height: 1;
+  padding: 6px 0;
+  text-align: center;
+}
+.avatar-option[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+
+@media (max-width: 420px) {
+  .avatar-grid { grid-template-columns: repeat(6, 1fr); }
+}

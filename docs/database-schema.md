@@ -36,9 +36,26 @@ CREATE TABLE users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    can_create_pools BOOLEAN NOT NULL DEFAULT FALSE,
+    token_version INT NOT NULL DEFAULT 0,
+    avatar_emoji VARCHAR(24),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+- `can_create_pools` — opening a pool is granted per account, not assumed.
+  Anyone may register and join with an invite code;
+  `scripts/grant-pool-creation.sh` flips this. Checked against the row rather
+  than the token, so a revoke takes effect on the next request.
+- `token_version` — stamped into every JWT and compared on each request.
+  Bumping it fails every token issued before now, which is the only way to end a
+  session given a signed token is otherwise valid until it expires. Raised by a
+  password change and by `/auth/sign-out-everywhere`.
+- `avatar_emoji` — one emoji, shown beside the name on every leaderboard. Per
+  account rather than per pool membership: it is who you are, not how you play
+  in one league. Wide enough for a ZWJ sequence or a flag, which run to several
+  code points each. NULL means none picked, and the UI shows nothing rather
+  than a placeholder.
 
 ### `pools`
 
