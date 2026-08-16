@@ -1,0 +1,13 @@
+node_modules/
+.env
+*.log
+.DS_Store
+
+# Terraform. The lock file is committed on purpose — it pins provider versions.
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+# State holds secrets in plain text, and tfvars often does too.
+*.tfvars
+!*.tfvars.example

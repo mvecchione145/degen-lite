@@ -1,0 +1,162 @@
+name: leaguepicks
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-leaguepicks}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leaguepicks}
+      POSTGRES_DB: ${POSTGRES_DB:-leaguepicks}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leaguepicks} -d ${POSTGRES_DB:-leaguepicks}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    # Append-only persistence on a named volume. Cached odds survive a restart,
+    # which matters on SharpAPI's 12 requests/minute free tier: without it every
+    # `docker compose up` would spend rate limit re-fetching lines it already had.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --dir
+      - /data
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis-ui:
+    image: redis/redisinsight:latest
+    # Browser UI for the cache: browse keys, watch TTLs tick down on the
+    # leaderboard entries, run commands. The RI_REDIS_* vars pre-register the
+    # `redis` service as a connection, so it opens straight onto the data.
+    environment:
+      RI_APP_PORT: 5540
+      RI_REDIS_HOST: redis
+      RI_REDIS_PORT: 6379
+      RI_REDIS_ALIAS: leaguepicks
+      # Without this RedisInsight drops the pre-registered connection and waits
+      # on the terms screen, so the UI would open empty.
+      RI_ACCEPT_TERMS_AND_CONDITIONS: "true"
+    volumes:
+      - redisinsight:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${REDIS_UI_PORT:-5540}:5540"
+
+  api:
+    build: ./api
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-leaguepicks}:${POSTGRES_PASSWORD:-leaguepicks}@db:5432/${POSTGRES_DB:-leaguepicks}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      LEADERBOARD_TTL_SECONDS: ${LEADERBOARD_TTL_SECONDS:-30}
+      DEV_TOOLS: ${DEV_TOOLS:-true}
+      LEGACY_POOL_MODES: ${LEGACY_POOL_MODES:-false}
+      INGEST_LEAGUES: ${INGEST_LEAGUES:-NFL}
+      SHARP_API_KEY: ${SHARP_API_KEY:-}
+      SHARP_API_BASE: ${SHARP_API_BASE:-https://api.sharpapi.io/api/v1}
+      SHARP_LEAGUE: ${SHARP_LEAGUE:-nfl}
+      SHARP_BOOKS: ${SHARP_BOOKS:-draftkings,fanduel}
+      SHARP_REQUESTS_PER_MINUTE: ${SHARP_REQUESTS_PER_MINUTE:-12}
+      SHARP_CACHE_TTL_SECONDS: ${SHARP_CACHE_TTL_SECONDS:-90}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  worker:
+    build: ./api
+    command: ["node", "src/worker.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-leaguepicks}:${POSTGRES_PASSWORD:-leaguepicks}@db:5432/${POSTGRES_DB:-leaguepicks}
+      REDIS_URL: redis://redis:6379
+      SETTLEMENT_CRON: ${SETTLEMENT_CRON:-*/1 * * * *}
+      INGEST_CRON: ${INGEST_CRON:-*/10 * * * *}
+      # Clock the cron hour fields are read against. The image carries no TZ, so
+      # without this an hour range would mean UTC.
+      CRON_TIMEZONE: ${CRON_TIMEZONE:-America/New_York}
+      INGEST_ENABLED: ${INGEST_ENABLED:-true}
+      INGEST_SEASON: ${INGEST_SEASON:-}
+      # Point at mock-espn to play a compressed season; unset for the real one.
+      ESPN_BASE: ${ESPN_BASE:-}
+      # Comma-separated: NFL, NCAAF, or both. Each league is a full walk of
+      # ESPN's scoreboard per tick — college is 17 slates of up to 99 games.
+      INGEST_LEAGUES: ${INGEST_LEAGUES:-NFL}
+      # Injected by `op run` — see scripts/compose.sh and .env.op.
+      SHARP_API_KEY: ${SHARP_API_KEY:-}
+      SHARP_API_BASE: ${SHARP_API_BASE:-https://api.sharpapi.io/api/v1}
+      SHARP_LEAGUE: ${SHARP_LEAGUE:-nfl}
+      SHARP_BOOKS: ${SHARP_BOOKS:-draftkings,fanduel}
+      SHARP_REQUESTS_PER_MINUTE: ${SHARP_REQUESTS_PER_MINUTE:-12}
+      SHARP_CACHE_TTL_SECONDS: ${SHARP_CACHE_TTL_SECONDS:-90}
+      ODDS_CRON: ${ODDS_CRON:-*/5 * * * *}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # A fake ESPN that plays a whole season in minutes. Off unless asked for:
+  #   docker compose --profile mock up -d mock-espn
+  # then point the worker at it with ESPN_BASE. See docs/mock-season.md.
+  mock-espn:
+    build: ./mock-espn
+    profiles: ["mock"]
+    environment:
+      PORT: 3001
+      MOCK_WEEK_SECONDS: ${MOCK_WEEK_SECONDS:-300}
+      MOCK_LEAD_SECONDS: ${MOCK_LEAD_SECONDS:-}
+      MOCK_GAME_SECONDS: ${MOCK_GAME_SECONDS:-}
+      MOCK_SEASON_START: ${MOCK_SEASON_START:-}
+    ports:
+      - "${MOCK_ESPN_PORT:-3001}:3001"
+
+  web:
+    build:
+      context: ./web
+      # Stamped into the footer. scripts/compose.sh fills these in from the
+      # working tree; a plain `docker compose build` leaves them empty and the
+      # footer drops the link rather than showing a wrong one.
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-}
+        GIT_REPO_URL: ${GIT_REPO_URL:-}
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+volumes:
+  pgdata:
+  redisdata:
+  redisinsight:

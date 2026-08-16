@@ -1,0 +1,230 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+// Renders the table builders out of web/public/app.js against realistic
+// payloads.
+//
+// It lives here because this is the only test runner wired up in the repo, and
+// app.js cannot simply be imported: it touches `document` at module scope. So
+// the functions under test are extracted by brace matching and evaluated on
+// their own.
+//
+// The bug this guards against: these builders are template literals, so a
+// reference to a variable that is not in scope is not a syntax error and
+// `node --check` passes. It fails at render time, in the browser, as
+// "Can't find variable: data" — after a bet is placed, which is the worst
+// moment to discover it.
+
+const SOURCE = readFileSync(
+  new URL('../../web/public/app.js', import.meta.url),
+  'utf8',
+);
+
+function extractFunction(name) {
+  const start = SOURCE.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `${name} not found in app.js`);
+
+  let depth = 0;
+  for (let i = SOURCE.indexOf('{', start); i < SOURCE.length; i += 1) {
+    if (SOURCE[i] === '{') depth += 1;
+    else if (SOURCE[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return SOURCE.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unbalanced braces in ${name}`);
+}
+
+// The handful of helpers the builders call. Stand-ins, not the real ones —
+// this is checking scope and structure, not formatting.
+const HELPERS = `
+  const esc = (v) => String(v ?? '');
+  const fmtMoney = (v) => Number(v ?? 0).toFixed(2);
+  const fmtSigned = (v) => (v > 0 ? '+' : '') + Number(v ?? 0).toFixed(2);
+  const fmtKickoff = (iso) => new Date(iso).toISOString();
+  const BET_STATUS_CLASS = { WON: 'green', LOST: 'red', PUSH: 'amber', VOID: 'grey', PENDING: '' };
+`;
+
+function render(name, arg) {
+  const fn = new Function(`${HELPERS}${extractFunction(name)}
+    return ${name}(${JSON.stringify(arg)});`);
+  return fn();
+}
+
+const BET = {
+  id: 'b1',
+  username: 'admin',
+  status: 'PENDING',
+  description: 'New England -3.5',
+  price: -110,
+  league: 'NFL',
+  week: 1,
+  away_team: 'New England',
+  home_team: 'Seattle',
+  home_score: null,
+  away_score: null,
+  stake: 100,
+  net: null,
+  is_mine: true,
+  placed_at: '2026-09-10T18:00:00.000Z',
+  kickoff_time: '2026-09-11T00:20:00.000Z',
+};
+
+const historyPayload = (filters) => ({
+  bets: [BET],
+  page: { limit: 25, offset: 0, total: 1, has_more: false },
+  summary: { total: 1, staked: 100, net: 0 },
+  filters,
+});
+
+test('the My bets table renders', () => {
+  const html = render('betHistoryTable', {
+    bets: [BET],
+    summary: { total: 1, won: 0, lost: 0, pushed: 0, voided: 0, staked: 100, net: 0 },
+  });
+  assert.match(html, /New England -3\.5/);
+  // It has no filters — its date column is always the placement time.
+  assert.match(html, /<th>Placed<\/th>/);
+});
+
+test('the My bets table handles an empty history', () => {
+  const html = render('betHistoryTable', { bets: [], summary: {} });
+  assert.match(html, /No bets yet/);
+});
+
+test('the pool history table renders and defaults to the kickoff column', () => {
+  const html = render('poolHistoryTable', historyPayload({}));
+  assert.match(html, /<th>Kickoff<\/th>/);
+  assert.match(html, /admin/);
+});
+
+test('the pool history column follows date_field', () => {
+  const html = render('poolHistoryTable', historyPayload({ date_field: 'placed' }));
+  assert.match(html, /<th>Placed<\/th>/);
+});
+
+test('an empty result says whether filters or the reveal rule caused it', () => {
+  const unfiltered = render('poolHistoryTable', {
+    ...historyPayload({}), bets: [], page: { limit: 25, offset: 0, total: 0, has_more: false },
+  });
+  assert.match(unfiltered, /No bets have been placed/);
+
+  const filtered = render('poolHistoryTable', {
+    ...historyPayload({ status: 'WON' }),
+    bets: [],
+    page: { limit: 25, offset: 0, total: 0, has_more: false },
+  });
+  assert.match(filtered, /No bets match these filters/);
+  // Either way it explains that pending bets by others are hidden.
+  assert.match(filtered, /kicks off/);
+});
+
+// renderAuth writes into the DOM rather than returning a string, so it needs a
+// stub rather than the plain extraction above. Worth the extra scaffolding:
+// the seeded credentials are printed on the one screen that is reachable
+// without logging in, so whether they render is a question about production,
+// not about layout.
+function renderAuthWith({ devTools }) {
+  const noop = () => {};
+  const element = { addEventListener: noop, value: '', checked: false };
+  const app = {
+    innerHTML: '',
+    querySelector: () => element,
+    querySelectorAll: () => [],
+  };
+
+  const fn = new Function('app', 'state', `
+    ${extractFunction('renderAuth')}
+    renderAuth();
+    return app.innerHTML;
+  `);
+  return fn(app, { authTab: 'login', devTools });
+}
+
+test('the demo credentials show while dev tools are on', () => {
+  const html = renderAuthWith({ devTools: true });
+  assert.match(html, /Demo account/);
+  assert.match(html, /password123/);
+});
+
+test('the demo credentials are absent once dev tools are off', () => {
+  // DEV_TOOLS=false, or NODE_ENV=production, which forces it — see
+  // resolveDevTools. The sign-in form itself must still be there.
+  const html = renderAuthWith({ devTools: false });
+  assert.doesNotMatch(html, /Demo account/);
+  assert.doesNotMatch(html, /password123/);
+  assert.match(html, /id="auth-form"/);
+  assert.match(html, /Sign in/);
+});
+
+// ---------------------------------------------------------------- XSS guards
+//
+// Every value that reaches markup in app.js goes through esc(), and every call
+// site is correct today. These pin that: usernames, pool names, invite codes
+// and team names are all attacker-influenced, and the whole surface depends on
+// nobody dropping one esc() in a later patch. Nothing else in the repo would
+// notice if they did.
+
+const HOSTILE = '<script>alert(1)</script>';
+const HOSTILE_ATTR = '" onmouseover="alert(1)';
+
+// The real esc(), lifted from app.js rather than reimplemented — a test that
+// escaped with its own copy would pass while the app's version rotted.
+function realEsc() {
+  const line = SOURCE.slice(SOURCE.indexOf('const esc = '));
+  return line.slice(0, line.indexOf('\n));') + 4);
+}
+
+function renderWithEsc(name, arg) {
+  const fn = new Function(`
+    ${realEsc()}
+    const fmtMoney = (v) => Number(v ?? 0).toFixed(2);
+    const fmtSigned = (v) => (v > 0 ? '+' : '') + Number(v ?? 0).toFixed(2);
+    const fmtKickoff = (iso) => new Date(iso).toISOString();
+    const BET_STATUS_CLASS = { WON: 'green', LOST: 'red', PUSH: 'amber', VOID: 'grey', PENDING: '' };
+    ${extractFunction(name)}
+    return ${name}(${JSON.stringify(arg)});
+  `);
+  return fn();
+}
+
+function assertNeutralised(html, label) {
+  assert.doesNotMatch(html, /<script>/i, `${label}: a raw <script> tag survived`);
+  // The escaped form is what should be there instead.
+  assert.match(html, /&lt;script&gt;/, `${label}: the payload was not escaped`);
+  // And nothing may break out of an attribute.
+  assert.doesNotMatch(html, /" onmouseover="/, `${label}: an attribute was broken out of`);
+}
+
+test('a hostile username cannot escape the pool history table', () => {
+  const html = renderWithEsc('poolHistoryTable', {
+    bets: [{ ...BET, username: HOSTILE, description: HOSTILE_ATTR }],
+    page: { limit: 25, offset: 0, total: 1, has_more: false },
+    summary: { total: 1, staked: 100, net: 0 },
+    filters: {},
+  });
+  assertNeutralised(html, 'pool history');
+});
+
+test('hostile team names cannot escape the My bets table', () => {
+  const html = renderWithEsc('betHistoryTable', {
+    bets: [{ ...BET, home_team: HOSTILE, away_team: HOSTILE_ATTR, description: HOSTILE }],
+    summary: { total: 1, won: 0, lost: 0, pushed: 0, voided: 0, staked: 100, net: 0 },
+  });
+  assertNeutralised(html, 'my bets');
+});
+
+test('esc() covers the five characters that matter', () => {
+  const esc = new Function(`${realEsc()} return esc;`)();
+  assert.equal(esc('<'), '&lt;');
+  assert.equal(esc('>'), '&gt;');
+  assert.equal(esc('&'), '&amp;');
+  assert.equal(esc('"'), '&quot;');
+  assert.equal(esc("'"), '&#39;');
+  // Ampersand first, or every other entity gets double-escaped.
+  assert.equal(esc('<a>&'), '&lt;a&gt;&amp;');
+  // Null and undefined render as nothing rather than the words.
+  assert.equal(esc(null), '');
+  assert.equal(esc(undefined), '');
+});

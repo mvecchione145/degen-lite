@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LeaguePicks</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏈</text></svg>" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#/pools">🏈 LeaguePicks</a>
+      <div class="topbar-actions" id="topbar-actions"></div>
+    </header>
+
+    <main id="app" class="container">
+      <p class="muted">Loading…</p>
+    </main>
+
+    <footer class="footer" id="footer"></footer>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <!-- Written at image build time; see web/Dockerfile. -->
+    <script src="/build-info.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
