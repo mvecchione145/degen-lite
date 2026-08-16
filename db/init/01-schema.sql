@@ -110,6 +110,13 @@ CREATE TABLE games (
     week INT NOT NULL,
     home_team VARCHAR(50) NOT NULL,
     away_team VARCHAR(50) NOT NULL,
+    -- The feed's own abbreviations (NE, SEA, TCU, NCSU). Stored rather than
+    -- derived: a full name does not fit a phone, and guessing the short form
+    -- from it is wrong often enough to matter — "TCU Horned Frogs" reduces to
+    -- TH, and the two Los Angeles teams collide. ESPN publishes the canonical
+    -- one per team, so this just keeps what the ingester was already reading.
+    home_team_abbr VARCHAR(8),
+    away_team_abbr VARCHAR(8),
     kickoff_time TIMESTAMP WITH TIME ZONE NOT NULL,
     -- The home team's line: -3.5 means the home team is favoured by 3.5.
     spread NUMERIC(4, 1) NOT NULL DEFAULT 0.0,

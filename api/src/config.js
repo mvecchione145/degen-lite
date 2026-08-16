@@ -98,7 +98,7 @@ export const config = {
     || 'https://site.api.espn.com/apis/site/v2/sports',
   // Which leagues the worker pulls. Every extra league is another full walk of
   // ESPN's scoreboard on each tick, so this is opt-in rather than everything.
-  ingestLeagues: (process.env.INGEST_LEAGUES || 'NFL')
+  ingestLeagues: (process.env.INGEST_LEAGUES || 'NFL,NCAAF')
     .split(',').map((l) => l.trim().toUpperCase()).filter(Boolean),
 
   // SharpAPI (sharpapi.io) supplies lines. Note this is a different product
