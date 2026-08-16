@@ -11,6 +11,7 @@ async function wagerStandings(pool) {
   const { rows } = await query(
     `SELECT u.id AS user_id,
             u.username,
+            u.avatar_emoji,
             pm.is_eliminated,
             pm.eliminated_week,
             pm.rebuys_used,
@@ -77,6 +78,7 @@ async function pickStandings(pool) {
   const { rows } = await query(
     `SELECT u.id AS user_id,
             u.username,
+            u.avatar_emoji,
             pm.is_eliminated,
             pm.eliminated_week,
             COUNT(p.id)::INT AS picks_made,
@@ -96,7 +98,7 @@ async function pickStandings(pool) {
        LEFT JOIN picks p ON p.pool_id = pm.pool_id AND p.user_id = pm.user_id
       WHERE pm.pool_id = $1
         AND pm.withdrawn_at IS NULL
-      GROUP BY u.id, u.username, pm.is_eliminated, pm.eliminated_week`,
+      GROUP BY u.id, u.username, u.avatar_emoji, pm.is_eliminated, pm.eliminated_week`,
     [pool.id, pool.pool_type],
   );
 

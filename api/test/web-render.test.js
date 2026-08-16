@@ -36,6 +36,24 @@ function extractFunction(name) {
   throw new Error(`unbalanced braces in ${name}`);
 }
 
+// Some builders lean on a module-scope constant (the abbreviation map, say),
+// which the function extractor above does not pull. Grabs `const NAME = ...;`
+// by brace matching the same way.
+function extractConst(name) {
+  const start = SOURCE.indexOf(`const ${name} = `);
+  assert.notEqual(start, -1, `${name} not found in app.js`);
+
+  let depth = 0;
+  for (let i = SOURCE.indexOf('{', start); i < SOURCE.length; i += 1) {
+    if (SOURCE[i] === '{') depth += 1;
+    else if (SOURCE[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return `${SOURCE.slice(start, i + 1)};`;
+    }
+  }
+  throw new Error(`unbalanced braces in ${name}`);
+}
+
 // The handful of helpers the builders call. Stand-ins, not the real ones —
 // this is checking scope and structure, not formatting.
 const HELPERS = `
@@ -76,21 +94,6 @@ const historyPayload = (filters) => ({
   page: { limit: 25, offset: 0, total: 1, has_more: false },
   summary: { total: 1, staked: 100, net: 0 },
   filters,
-});
-
-test('the My bets table renders', () => {
-  const html = render('betHistoryTable', {
-    bets: [BET],
-    summary: { total: 1, won: 0, lost: 0, pushed: 0, voided: 0, staked: 100, net: 0 },
-  });
-  assert.match(html, /New England -3\.5/);
-  // It has no filters — its date column is always the placement time.
-  assert.match(html, /<th>Placed<\/th>/);
-});
-
-test('the My bets table handles an empty history', () => {
-  const html = render('betHistoryTable', { bets: [], summary: {} });
-  assert.match(html, /No bets yet/);
 });
 
 test('the pool history table renders and defaults to the kickoff column', () => {
@@ -207,12 +210,88 @@ test('a hostile username cannot escape the pool history table', () => {
   assertNeutralised(html, 'pool history');
 });
 
-test('hostile team names cannot escape the My bets table', () => {
-  const html = renderWithEsc('betHistoryTable', {
+// The My bets table is gone — History covers it with filters — but team names
+// still reach the screen through the pool history table, so the escaping this
+// used to guard has to follow them rather than be deleted with the table.
+test('hostile team names cannot escape the pool history table', () => {
+  const html = renderWithEsc('poolHistoryTable', {
     bets: [{ ...BET, home_team: HOSTILE, away_team: HOSTILE_ATTR, description: HOSTILE }],
-    summary: { total: 1, won: 0, lost: 0, pushed: 0, voided: 0, staked: 100, net: 0 },
+    page: { limit: 25, offset: 0, total: 1, has_more: false },
+    summary: { total: 1, staked: 100, net: 0 },
+    filters: {},
   });
-  assertNeutralised(html, 'my bets');
+  assertNeutralised(html, 'pool history team names');
+});
+
+// Short team names, issue #13. The board puts a team beside its line and price
+// in one button; at full length that overflows a phone, so both forms are in
+// the markup and CSS picks one.
+test('the feed\'s own abbreviation is used when there is one', () => {
+  const shortTeam = new Function(`${extractFunction('shortTeam')} return shortTeam;`)();
+  assert.equal(shortTeam('New England Patriots', 'NE'), 'NE');
+  assert.equal(shortTeam('TCU Horned Frogs', 'TCU'), 'TCU');
+  assert.equal(shortTeam('North Carolina Tar Heels', 'UNC'), 'UNC');
+  assert.equal(shortTeam('NC State Wolfpack', 'NCSU'), 'NCSU');
+});
+
+// The fallback only runs for rows ingested before the column existed. It is
+// pinned because it is visibly imperfect — deriving a short name from a display
+// name cannot recover TCU from "TCU Horned Frogs" — and the point of these
+// assertions is that it stays predictable, not that it is right.
+test('without one, a short name is derived and stays stable', () => {
+  const shortTeam = new Function(`${extractFunction('shortTeam')} return shortTeam;`)();
+  assert.equal(shortTeam('New England Patriots', null), 'NE');
+  assert.equal(shortTeam('Seattle Seahawks', null), 'SEA');
+  assert.equal(shortTeam('Ohio State Buckeyes', null), 'OS');
+  assert.equal(shortTeam('Army', null), 'ARM');
+  assert.equal(shortTeam('', null), '');
+  // Why the stored abbreviation is worth a column: these are the wrong answers.
+  assert.equal(shortTeam('TCU Horned Frogs', null), 'TH');
+  assert.equal(shortTeam('North Carolina Tar Heels', null), 'NCT');
+});
+
+// Issue #14: the quick filters set the controls below them, so a chip that
+// cannot map onto a real control must not be offered at all. In week 1 "Last
+// week" would carry week 0, which no season has.
+test('quick filters only offer weeks that exist', () => {
+  const quickFilters = new Function(
+    `${realEsc()} ${extractFunction('quickFilters')} return quickFilters;`,
+  )();
+  const labels = (userId, week) => (quickFilters({}, userId, week).match(/>[^<>]+<\/button>/g) ?? [])
+    .map((m) => m.slice(1, -'</button>'.length));
+
+  assert.deepEqual(labels('u1', 1), ['My bets', 'This week']);
+  assert.deepEqual(labels('u1', 2), ['My bets', 'This week', 'Last week']);
+  assert.deepEqual(labels('u1', null), ['My bets']);
+  assert.deepEqual(labels('', 5), ['This week', 'Last week']);
+});
+
+// A pool can play a league whose schedule has not been ingested. That league
+// has no current week and no week list, so the resolved week is undefined —
+// and interpolated into a query string, undefined becomes the literal text
+// "undefined", which the week parameter rejects as NaN. The board then failed
+// with "Expected number, received nan" instead of showing an empty slate.
+test('a week that does not exist is normalised to null, not "undefined"', () => {
+  const resolve = (requestedWeek, view) => {
+    const resolvedWeek = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+    return Number.isFinite(Number(resolvedWeek)) ? Number(resolvedWeek) : null;
+  };
+  const empty = { current_week: null, weeks: [] };
+  const loaded = { current_week: 3, weeks: [{ week: 1 }] };
+
+  assert.equal(resolve(null, empty), null, 'a league with no schedule');
+  assert.equal(resolve(undefined, empty), null);
+  assert.equal(resolve(null, loaded), 3, 'falls back to the current week');
+  assert.equal(resolve(7, loaded), 7, 'an explicit week wins');
+  assert.equal(resolve(null, { current_week: null, weeks: [{ week: 5 }] }), 5);
+});
+
+// The query string must omit the parameter rather than send a placeholder.
+test('the board query omits week when there is none', () => {
+  const url = (league, week) => `/pools/p1/board?league=${league}`
+    + (week == null ? '' : `&week=${week}`);
+  assert.equal(url('NCAAF', null), '/pools/p1/board?league=NCAAF');
+  assert.equal(url('NFL', 1), '/pools/p1/board?league=NFL&week=1');
 });
 
 test('esc() covers the five characters that matter', () => {

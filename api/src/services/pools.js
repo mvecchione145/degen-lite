@@ -168,7 +168,8 @@ export async function requireMembership(poolId, userId, client = null) {
 
 export async function listMembers(poolId) {
   const { rows } = await query(
-    `SELECT u.id, u.username, pm.joined_at, pm.is_eliminated, pm.eliminated_week,
+    `SELECT u.id, u.username, u.avatar_emoji,
+            pm.joined_at, pm.is_eliminated, pm.eliminated_week,
             pm.withdrawn_at
        FROM pool_members pm
        JOIN users u ON u.id = pm.user_id

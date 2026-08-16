@@ -92,6 +92,38 @@ async function main() {
     })).status === 409);
   check('unauthenticated request is rejected', (await call('/pools')).status === 401);
 
+  // One emoji beside the name on leaderboards. Validated rather than taken as
+  // free text: it renders into other members' rows, so anything that is not an
+  // emoji would be writing arbitrary content somewhere that is not yours.
+  check('an emoji avatar is accepted',
+    (await call('/auth/avatar', {
+      method: 'POST', token, body: { avatar_emoji: '🦈' },
+    })).data.user?.avatar_emoji === '🦈');
+  check('a multi-code-point emoji is accepted',
+    (await call('/auth/avatar', {
+      method: 'POST', token, body: { avatar_emoji: '👍🏽' },
+    })).data.user?.avatar_emoji === '👍🏽');
+  check('plain text is refused as an avatar',
+    (await call('/auth/avatar', {
+      method: 'POST', token, body: { avatar_emoji: 'admin' },
+    })).status === 400);
+  check('markup is refused as an avatar',
+    (await call('/auth/avatar', {
+      method: 'POST', token, body: { avatar_emoji: '<img src=x onerror=alert(1)>' },
+    })).status === 400);
+  check('null clears the avatar',
+    (await call('/auth/avatar', {
+      method: 'POST', token, body: { avatar_emoji: null },
+    })).data.user?.avatar_emoji === null);
+
+  // /auth/me runs on every page load. It shared the brute-force budget with
+  // /login until that limiter was scoped to the credential routes, which locked
+  // members out of their own account for ordinary browsing.
+  const meBurst = [];
+  for (let i = 0; i < 25; i += 1) meBurst.push((await call('/auth/me', { token })).status);
+  check('reading your own account is not rate limited',
+    meBurst.every((s) => s === 200), `saw ${[...new Set(meBurst)].join(',')}`);
+
   section('Real schedule');
   const weeks = await call('/games/weeks', { token });
   const season = weeks.data.season;

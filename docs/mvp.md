@@ -27,6 +27,8 @@ no pools at all, and generates no sports data.
   credited, Redis-cached
 - **Bet history** — every wager with the line and price as struck, and running P&L
 - **Reveal** — other members' bets stay hidden until a game kicks off
+- **Emoji avatars** — one emoji per account, shown beside the name on every
+  leaderboard, set from a picker in the header
 - **Legacy modes** — Pick'em, Confidence, and Survivor pools remain fully
   playable behind a flag
 
@@ -128,6 +130,20 @@ Settlement runs every minute, so every step keys off a state it clears itself:
 Bust is evaluated **after** payouts and stipends land, so a member whose winnings
 arrived in the same cycle is not eliminated by mistake.
 
+### Rate limiting
+
+`authIpLimiter` guards `/auth/register` and `/auth/login` — the two routes that
+check a password, where bcrypt is otherwise the only cost an attacker pays. It
+is applied per route rather than to the whole auth router.
+
+The authenticated routes in that file sit deliberately outside it. `/auth/me`
+runs on every page load, so a shared brute-force budget of 20 requests per 15
+minutes locked members out of their own account for ordinary browsing, and every
+authenticated endpoint added to the file inherited the same trap.
+`loginAccountLimiter` additionally keys on the account being attempted and
+counts failures only, so typing your own password correctly all day never
+touches it.
+
 ## Rules enforced in the application
 
 The schema cannot express these, so they live in `api/src/services/bets.js`:
@@ -174,6 +190,7 @@ points requires `Authorization: Bearer <token>`.
 | `POST` | `/auth/register` | `{username, email, password}` → `{token, user}` |
 | `POST` | `/auth/login` | `{login, password}` — `login` is a username or email |
 | `GET` | `/auth/me` | The authenticated user |
+| `POST` | `/auth/avatar` | `{avatar_emoji}` — one emoji, or null to clear it |
 
 ### Pools
 

@@ -36,9 +36,26 @@ CREATE TABLE users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    can_create_pools BOOLEAN NOT NULL DEFAULT FALSE,
+    token_version INT NOT NULL DEFAULT 0,
+    avatar_emoji VARCHAR(24),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+- `can_create_pools` — opening a pool is granted per account, not assumed.
+  Anyone may register and join with an invite code;
+  `scripts/grant-pool-creation.sh` flips this. Checked against the row rather
+  than the token, so a revoke takes effect on the next request.
+- `token_version` — stamped into every JWT and compared on each request.
+  Bumping it fails every token issued before now, which is the only way to end a
+  session given a signed token is otherwise valid until it expires. Raised by a
+  password change and by `/auth/sign-out-everywhere`.
+- `avatar_emoji` — one emoji, shown beside the name on every leaderboard. Per
+  account rather than per pool membership: it is who you are, not how you play
+  in one league. Wide enough for a ZWJ sequence or a flag, which run to several
+  code points each. NULL means none picked, and the UI shows nothing rather
+  than a placeholder.
 
 ### `pools`
 
@@ -122,6 +139,8 @@ CREATE TABLE games (
     week INT NOT NULL,
     home_team VARCHAR(50) NOT NULL,
     away_team VARCHAR(50) NOT NULL,
+    home_team_abbr VARCHAR(8),                  -- NE, SEA, TCU, NCSU
+    away_team_abbr VARCHAR(8),
     kickoff_time TIMESTAMP WITH TIME ZONE NOT NULL,
     spread NUMERIC(4, 1) NOT NULL DEFAULT 0.0,  -- the home team's line
     total NUMERIC(4, 1),                        -- NULL = no total offered
@@ -132,6 +151,15 @@ CREATE TABLE games (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+The abbreviations come from the feed rather than being derived from the display
+name. Deriving looked cheaper and is wrong too often to use: the school name is
+frequently already an acronym, so "TCU Horned Frogs" reduces to TH and "UNLV
+Rebels" to UNL, and a two-word nickname defeats any single-word strip — "North
+Carolina Tar Heels" gives NCT rather than UNC. ESPN publishes the canonical one
+per team for both leagues, and the ingester was already reading it to parse the
+spread. NULL on rows ingested before the column existed; the next ingest fills
+them, and the board falls back to the full name meanwhile.
 
 There are **no price columns**. While every market is priced −110 the price is a
 constant, not data.

@@ -19,7 +19,11 @@ function tooMany(res, message) {
   res.status(429).json({ error: message });
 }
 
-// Everything under /api/auth: login, register, and the session endpoints.
+// Applied to /register and /login only — the two routes that check a password.
+// The authenticated routes in that file (/me, /avatar, /sign-out-everywhere)
+// deliberately do not share this budget: /me runs on every page load, so
+// putting reads on a brute-force allowance locks members out of their own
+// account for ordinary use.
 export const authIpLimiter = rateLimit({
   windowMs: config.auth.windowMs,
   limit: config.auth.maxPerIp,

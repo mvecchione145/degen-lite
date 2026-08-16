@@ -136,11 +136,88 @@ function renderFooter() {
   footer.innerHTML = `<span class="muted small">LeaguePicks · build ${body}</span>`;
 }
 
+// A curated grid rather than a free-text box or the OS emoji keyboard. The
+// server accepts any emoji, but most people want to pick one in two clicks,
+// and a grid cannot produce the input the validator has to reject.
+const AVATAR_CHOICES = [
+  '🦈', '🐐', '🔥', '🎲', '🍀', '💎', '🚀', '👑',
+  '🏈', '🏆', '⚡', '🧊', '🐺', '🦅', '🐍', '🦍',
+  '🤖', '👻', '🤠', '🥶', '😎', '🤡', '💀', '🧠',
+];
+
+function openAvatarPicker() {
+  const current = state.user?.avatar_emoji ?? null;
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal';
+  dialog.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Choose your emoji">
+      <div class="row-between" style="margin-bottom:12px">
+        <h2 style="margin:0">Your emoji</h2>
+        <button class="ghost" data-close>Close</button>
+      </div>
+      <p class="muted small" style="margin:0 0 12px">
+        Shown beside your name on every leaderboard.
+      </p>
+      <div class="avatar-grid">
+        ${AVATAR_CHOICES.map((e) => `
+          <button class="avatar-option" data-emoji="${esc(e)}"
+                  aria-pressed="${e === current}">${e}</button>`).join('')}
+      </div>
+      <div class="row-between" style="margin-top:14px">
+        <button data-clear ${current ? '' : 'disabled'}>Remove emoji</button>
+      </div>
+    </div>`;
+
+  const close = () => dialog.remove();
+
+  async function choose(emoji) {
+    try {
+      const { user } = await api('/auth/avatar', {
+        method: 'POST',
+        body: { avatar_emoji: emoji },
+      });
+      state.user = user;
+      renderTopbar();
+      close();
+      // The leaderboard is rendered from a cached payload that now carries a
+      // stale emoji, so redraw whatever is on screen.
+      await render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+
+  dialog.addEventListener('click', (event) => {
+    // Clicking the backdrop dismisses; clicking the card must not.
+    if (event.target === dialog || event.target.closest('[data-close]')) return close();
+    const option = event.target.closest('[data-emoji]');
+    if (option) return choose(option.dataset.emoji);
+    if (event.target.closest('[data-clear]')) return choose(null);
+    return undefined;
+  });
+
+  document.addEventListener('keydown', function onKey(event) {
+    if (event.key !== 'Escape') return;
+    document.removeEventListener('keydown', onKey);
+    close();
+  });
+
+  document.body.appendChild(dialog);
+}
+
 function renderTopbar() {
   topbarActions.innerHTML = state.user
-    ? `<span class="muted small">${esc(state.user.username)}</span>
+    ? `<button class="avatar-pick" data-action="avatar"
+               title="Choose the emoji shown beside your name">
+         <span class="avatar">${esc(state.user.avatar_emoji || '🙂')}</span>
+         <span class="muted small">${esc(state.user.username)}</span>
+       </button>
        <button class="ghost" data-action="logout">Sign out</button>`
     : '';
+
+  topbarActions.querySelector('[data-action="avatar"]')
+    ?.addEventListener('click', openAvatarPicker);
 
   // Local only: drops the token from this browser. The token itself stays valid
   // until it expires. Invalidating it everywhere is still possible through
@@ -488,13 +565,50 @@ function balanceStrip(balance, pool, standing) {
     </div>`;
 }
 
+/* ------------------------------------------------------------ team names */
+
+// The board shows a team per button beside its line and price. At full length
+// ("New England Patriots") that overflows a phone, so the markup carries both
+// forms and CSS picks one at the breakpoint — no resize listener, and no
+// guessing the viewport in JS.
+
+// The board shows a team beside its line and price. Prefer the abbreviation the
+// feed publishes — ESPN gives the canonical one per team, both leagues.
+//
+// Deriving it from the display name looked cheaper and is wrong too often to
+// use: the school name is frequently already an acronym, so "TCU Horned Frogs"
+// reduces to TH and "UNLV Rebels" to UNL, and a two-word nickname defeats any
+// single-word strip ("North Carolina Tar Heels" -> NCT, not UNC). This remains
+// only as a fallback for rows ingested before the column existed, which the
+// next ingest refreshes.
+function shortTeam(name, abbr) {
+  if (abbr) return abbr;
+
+  const full = String(name ?? '');
+  const words = full.trim().split(/\s+/);
+  // "Army" is the whole name, not a nickname — never strip to nothing.
+  const school = words.length > 1 ? words.slice(0, -1) : words;
+  if (school.length > 1) return school.map((w) => w[0]).join('').toUpperCase().slice(0, 4);
+  return (school[0] ?? full).slice(0, 3).toUpperCase();
+}
+
+// Both forms, for the market buttons — a team sits there beside its line and
+// price, and the full name does not fit that on a phone. The fixture line above
+// the buttons deliberately keeps the full names: it is what tells a reader that
+// SEA is Seattle, and it has a whole row to wrap into.
+const teamLabel = (name, abbr) => `<span class="team-long">${esc(name)}</span>`
+  + `<span class="team-short">${esc(shortTeam(name, abbr))}</span>`;
+
 function marketButton(game, market, selection, board) {
   const line = market === 'SPREAD'
     ? (selection === 'HOME' ? game.spread : -game.spread)
     : game.total;
   const label = market === 'SPREAD'
-    ? (selection === 'HOME' ? game.home_team : game.away_team)
-    : (selection === 'OVER' ? 'Over' : 'Under');
+    ? teamLabel(
+      selection === 'HOME' ? game.home_team : game.away_team,
+      selection === 'HOME' ? game.home_team_abbr : game.away_team_abbr,
+    )
+    : esc(selection === 'OVER' ? 'Over' : 'Under');
   const display = market === 'SPREAD' ? fmtLine(line) : line;
 
   const active = state.slip
@@ -510,7 +624,7 @@ function marketButton(game, market, selection, board) {
     <button class="market-btn" type="button" aria-pressed="${Boolean(active)}"
             data-bet="${esc(game.id)}|${market}|${selection}"
             ${disabled ? 'disabled' : ''}>
-      <span class="market-name">${esc(label)}</span>
+      <span class="market-name">${label}</span>
       <span class="market-line">${unavailable ? '—' : esc(display)}</span>
       <span class="market-price">${board.price}</span>
     </button>`;
@@ -634,7 +748,7 @@ function boardGame(game, board) {
   return `
     <div class="game${game.locked ? ' locked' : ''}">
       <div class="game-meta">
-        <span>${esc(game.away_team)} @ ${esc(game.home_team)}</span>
+        <span class="fixture">${esc(game.away_team)} @ ${esc(game.home_team)}</span>
         <span>
           ${scored ? `${game.away_score} – ${game.home_score} · ` : ''}
           ${game.status === 'VOID' ? '<span class="badge red">Void</span>'
@@ -671,44 +785,6 @@ function boardGame(game, board) {
     </div>`;
 }
 
-function betHistoryTable(history) {
-  if (history.bets.length === 0) {
-    return '<p class="muted">No bets yet. Place one from the board.</p>';
-  }
-  const s = history.summary;
-  return `
-    <p class="muted small" style="margin-top:0">
-      ${s.total} bets · ${s.won}W ${s.lost}L ${s.pushed}P${s.voided ? ` ${s.voided}V` : ''} ·
-      staked ${fmtMoney(s.staked)} ·
-      net <span class="${s.net >= 0 ? 'pos' : 'neg'}">${fmtSigned(s.net)}</span>
-    </p>
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Status</th><th>Wager</th><th>Game</th>
-            <th class="num">Stake</th><th class="num">Net</th><th>Placed</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${history.bets.map((bet) => `
-            <tr>
-              <td><span class="badge ${BET_STATUS_CLASS[bet.status]}">${bet.status}</span></td>
-              <td>${esc(bet.description)} <span class="muted small">${bet.price}</span></td>
-              <td class="muted small">
-                W${bet.week} · ${esc(bet.away_team)} @ ${esc(bet.home_team)}
-                ${bet.home_score !== null ? ` (${bet.away_score}–${bet.home_score})` : ''}
-              </td>
-              <td class="num">${fmtMoney(bet.stake)}</td>
-              <td class="num ${bet.net > 0 ? 'pos' : bet.net < 0 ? 'neg' : ''}">
-                ${bet.net === null ? '—' : fmtSigned(bet.net)}
-              </td>
-              <td class="muted small">${fmtKickoff(bet.placed_at)}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
-}
 
 /* ------------------------------------------------ commissioner controls */
 
@@ -819,6 +895,7 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
             <tr class="${row.user_id === currentUserId ? 'me' : ''}">
               <td class="num">${row.rank}</td>
               <td class="${row.is_eliminated ? 'eliminated' : ''}">
+                ${row.avatar_emoji ? `<span class="avatar">${esc(row.avatar_emoji)}</span>` : ''}
                 ${esc(row.username)}
                 ${row.is_eliminated ? '<span class="badge red">Bust</span>' : ''}
                 ${row.rebuys_used > 0 ? `<span class="badge grey">${row.rebuys_used}× rebuy</span>` : ''}
@@ -881,12 +958,40 @@ function historyQuery(filters, offset) {
   return params.toString();
 }
 
-function historyFilterBar(pool, members, filters) {
+// Shortcuts for the three questions people actually open this tab to ask.
+// Each one is a set of values for the controls below rather than a mode of its
+// own, so the filter bar always shows what is applied and Clear still undoes
+// it — a quick filter with hidden state would be a second source of truth.
+function quickFilters(filters, myUserId, currentWeek) {
+  const week = Number(currentWeek);
+  const hasWeek = Number.isInteger(week) && week >= 1;
+
+  const chips = [];
+  if (myUserId) chips.push({ label: 'My bets', set: { user_id: myUserId } });
+  if (hasWeek) chips.push({ label: 'This week', set: { week: String(week) } });
+  // Only from week 2. Offered in week 1 it would carry week 0, which is not a
+  // week the season has — the select would have no such option and the chip
+  // would sit there doing nothing.
+  if (hasWeek && week > 1) chips.push({ label: 'Last week', set: { week: String(week - 1) } });
+
+  return `
+    <div class="quick-filters">
+      ${chips.map((c) => {
+    const on = Object.entries(c.set).every(([k, v]) => (filters[k] ?? '') === v);
+    return `<button class="chip" data-quick="${esc(JSON.stringify(c.set))}"
+                    aria-pressed="${on}">${esc(c.label)}</button>`;
+  }).join('')}
+    </div>`;
+}
+
+function historyFilterBar(pool, members, filters, { myUserId, currentWeek, weeks = [] } = {}) {
   const opt = (value, label, selected) =>
     `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
   const leagues = pool.leagues ?? ['NFL'];
+  const weekNumbers = weeks.map((w) => w.week);
 
   return `
+    ${quickFilters(filters, myUserId, currentWeek)}
     <div class="filters" id="history-filters">
       <label>Member
         <select name="user_id">
@@ -901,6 +1006,12 @@ function historyFilterBar(pool, members, filters) {
             ${leagues.map((id) => opt(id, LEAGUE_LABELS[id] ?? id, filters.league ?? '')).join('')}
           </select>
         </label>` : ''}
+      <label>Week
+        <select name="week">
+          ${opt('', 'Any', filters.week ?? '')}
+          ${weekNumbers.map((w) => opt(String(w), `W${w}`, filters.week ?? '')).join('')}
+        </select>
+      </label>
       <label>Status
         <select name="status">
           ${opt('', 'Any', filters.status ?? '')}
@@ -1003,7 +1114,7 @@ function boardHash(poolId, leagues, league, week) {
 }
 
 // Weeks shown either side of the open week before the arrows are needed.
-const WEEK_NAV_RADIUS = 3;
+const WEEK_NAV_RADIUS = 2;
 const WEEK_NAV_SIZE = WEEK_NAV_RADIUS * 2 + 1;
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -1060,9 +1171,9 @@ async function renderSharksPool(detail, week) {
   const league = detail.league;
   const leagues = detail.pool.leagues ?? ['NFL'];
   const isCommish = Boolean(detail.is_commissioner);
-  const [board, history, leaderboard, log, pending] = await Promise.all([
-    api(`/pools/${poolId}/board?league=${league}&week=${week}`),
-    api(`/pools/${poolId}/bets`),
+  const [board, leaderboard, log, pending] = await Promise.all([
+    api(`/pools/${poolId}/board?league=${league}`
+      + (week == null ? '' : `&week=${week}`)),
     api(`/pools/${poolId}/leaderboard`),
     api(`/pools/${poolId}/events`),
     // Only the commissioner may read this, so only they ask for it.
@@ -1074,7 +1185,11 @@ async function renderSharksPool(detail, week) {
     && balance.rebuys_used < (pool.rebuy_limit ?? 0);
 
   const paintBoard = () => {
-    app.querySelector('#board').innerHTML = board.games
+    // Absent when the league has no schedule ingested — the card shows an
+    // explanation instead of a slate, and there is nothing to paint.
+    const host = app.querySelector('#board');
+    if (!host) return;
+    host.innerHTML = board.games
       .map((game) => boardGame(game, board)).join('');
     wireBoard();
     app.querySelector('#slip-stake')?.focus();
@@ -1178,8 +1293,7 @@ async function renderSharksPool(detail, week) {
 
     <div class="tabs">
       <button data-view="board" aria-selected="${state.tab === 'board'}">Board</button>
-      <button data-view="bets" aria-selected="${state.tab === 'bets'}">My bets</button>
-      <button data-view="history" aria-selected="${state.tab === 'history'}">History</button>
+      <button data-view="bets" aria-selected="${state.tab === 'bets'}">Bets</button>
       <button data-view="leaderboard" aria-selected="${state.tab === 'leaderboard'}">Leaderboard</button>
       ${isCommish
     ? `<button data-view="manage" aria-selected="${state.tab === 'manage'}">Manage</button>` : ''}
@@ -1187,8 +1301,8 @@ async function renderSharksPool(detail, week) {
 
     <div class="card" data-panel="board" ${state.tab === 'board' ? '' : 'hidden'}>
       <div class="row-between" style="margin-bottom:12px;">
-        <h2 style="margin:0">Week ${week}</h2>
-        ${state.devTools
+        <h2 style="margin:0">${week == null ? 'No schedule yet' : `Week ${week}`}</h2>
+        ${state.devTools && week != null
     ? '<button data-action="simulate" title="Development only: fabricate final scores for this week">Simulate results</button>'
     : ''}
       </div>
@@ -1200,26 +1314,33 @@ async function renderSharksPool(detail, week) {
               ${esc(LEAGUE_LABELS[id] ?? id)}
             </button>`).join('')}
         </div>
-        <p class="muted small" style="margin:0 0 10px">
-          Each league keeps its own week numbering — ${esc(LEAGUE_LABELS[league] ?? league)}
-          week ${week} here.
-        </p>` : ''}
-      <div data-week-nav>${weekNav(detail.weeks, week, poolId, league)}</div>
-      <div id="board"></div>
+        ${week == null ? '' : `
+          <p class="muted small" style="margin:0 0 10px">
+            Each league keeps its own week numbering — ${esc(LEAGUE_LABELS[league] ?? league)}
+            week ${week} here.
+          </p>`}` : ''}
+      ${week == null ? `
+        <p class="muted">
+          No ${esc(LEAGUE_LABELS[league] ?? league)} games have been ingested for
+          season ${pool.season} yet, so there is nothing to bet on here. The
+          worker pulls each league listed in INGEST_LEAGUES — check that this one
+          is among them, and give it a minute after it starts.
+        </p>` : `
+        <div data-week-nav>${weekNav(detail.weeks, week, poolId, league)}</div>
+        <div id="board"></div>`}
     </div>
 
     <div class="card" data-panel="bets" ${state.tab === 'bets' ? '' : 'hidden'}>
-      <h2>Bet history</h2>
-      ${betHistoryTable(history)}
-    </div>
-
-    <div class="card" data-panel="history" ${state.tab === 'history' ? '' : 'hidden'}>
       <div class="row-between" style="margin-bottom:12px;">
-        <h2 style="margin:0">Pool history</h2>
+        <h2 style="margin:0">Bets</h2>
         <span class="muted small">Every member's bets, newest first</span>
       </div>
       ${historyFilterBar(pool, detail.members, state.history.poolId === poolId
-    ? (state.history.filters ?? {}) : {})}
+    ? (state.history.filters ?? {}) : {}, {
+    myUserId: state.user?.id,
+    currentWeek: detail.current_week,
+    weeks: detail.weeks,
+  })}
       <div id="history-body"><p class="muted">Loading…</p></div>
     </div>
 
@@ -1250,10 +1371,25 @@ async function renderSharksPool(detail, week) {
 
   // Fetched on demand rather than alongside the board: it is the one panel
   // whose contents are paginated, and most visits never open it.
+  // loadHistory only swaps the results, so the chips have to be restated by
+  // hand — otherwise a chip clicked once stays pressed after its fields are
+  // cleared by something else.
+  function syncQuickFilters() {
+    const bar = app.querySelector('#history-filters');
+    if (!bar) return;
+    app.querySelectorAll('[data-quick]').forEach((chip) => {
+      const set = JSON.parse(chip.dataset.quick);
+      const on = Object.entries(set)
+        .every(([name, value]) => bar.querySelector(`[name="${name}"]`)?.value === value);
+      chip.setAttribute('aria-pressed', String(on));
+    });
+  }
+
   async function loadHistory(offset, filters = state.history.filters ?? {}) {
     const body = app.querySelector('#history-body');
     if (!body) return;
     state.history = { poolId, offset, filters };
+    syncQuickFilters();
     body.innerHTML = '<p class="muted">Loading…</p>';
     try {
       const data = await api(
@@ -1283,6 +1419,22 @@ async function renderSharksPool(detail, week) {
       });
       loadHistory(0, {});
     });
+
+    // A quick filter writes into the controls and reloads, so the bar always
+    // shows what is applied. Pressing the active one again clears just that
+    // chip's fields rather than everything, which is what "toggle" has to mean
+    // when two chips can be on at once.
+    app.querySelectorAll('[data-quick]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const set = JSON.parse(chip.dataset.quick);
+        const on = chip.getAttribute('aria-pressed') === 'true';
+        Object.entries(set).forEach(([name, value]) => {
+          const el = bar.querySelector(`[name="${name}"]`);
+          if (el) el.value = on ? '' : value;
+        });
+        loadHistory(0, readHistoryFilters());
+      });
+    });
   }
 
   const historyStart = () => (state.history.poolId === poolId ? state.history.offset : 0);
@@ -1297,7 +1449,7 @@ async function renderSharksPool(detail, week) {
         panel.hidden = panel.dataset.panel !== state.tab;
       });
       // Re-fetched on every open so a settled bet is not shown as pending.
-      if (state.tab === 'history') loadHistory(historyStart(), readHistoryFilters());
+      if (state.tab === 'bets') loadHistory(historyStart(), readHistoryFilters());
     });
   });
 
@@ -1351,7 +1503,7 @@ async function renderSharksPool(detail, week) {
   // The tab survives a repaint, so a bet placed while History was open lands
   // back on History — with an empty panel unless it is filled here too.
   wireHistoryFilters();
-  if (state.tab === 'history') loadHistory(historyStart(), readHistoryFilters());
+  if (state.tab === 'bets') loadHistory(historyStart(), readHistoryFilters());
 
   wireWeekNav(detail.weeks, week, poolId, league, (selected) => {
     state.slip = null;
@@ -1714,7 +1866,13 @@ async function renderPool(poolId, requestedLeague, requestedWeek) {
   const view = detail.by_league?.[league] ?? {
     current_week: detail.current_week, weeks: detail.weeks,
   };
-  const week = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+  // A league the pool plays but whose schedule has not been ingested has no
+  // current week and no week list, so this lands on undefined. Normalising to
+  // null here matters: interpolated into a query string, undefined becomes the
+  // literal text "undefined", which the week parameter rejects as NaN — the
+  // board then fails with a validation error instead of showing an empty slate.
+  const resolvedWeek = requestedWeek ?? view.current_week ?? view.weeks[0]?.week;
+  const week = Number.isFinite(Number(resolvedWeek)) ? Number(resolvedWeek) : null;
   detail.league = league;
   detail.weeks = view.weeks;
   detail.current_week = view.current_week;
