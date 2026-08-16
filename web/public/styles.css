@@ -489,7 +489,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .week-nav button { padding: 8px 6px; font-size: 13px; min-width: 0; flex: 1; }
   .week-nav .week-shift { flex: 0 0 auto; padding: 8px 8px; }
 
-  /* Long fixture lines wrap instead of pushing the card wide. */
+  /* The fixture line keeps full team names, so on a phone it has to wrap
+     rather than push the card wide — college names run past 50 characters. */
   .game-meta { flex-wrap: wrap; }
+  .game-meta .fixture { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
   .market-btn { padding: 8px; }
 }

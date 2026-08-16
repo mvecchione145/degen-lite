@@ -592,7 +592,10 @@ function shortTeam(name, abbr) {
   return (school[0] ?? full).slice(0, 3).toUpperCase();
 }
 
-// Both forms, for anywhere the full name will not fit on a phone.
+// Both forms, for the market buttons — a team sits there beside its line and
+// price, and the full name does not fit that on a phone. The fixture line above
+// the buttons deliberately keeps the full names: it is what tells a reader that
+// SEA is Seattle, and it has a whole row to wrap into.
 const teamLabel = (name, abbr) => `<span class="team-long">${esc(name)}</span>`
   + `<span class="team-short">${esc(shortTeam(name, abbr))}</span>`;
 
@@ -745,8 +748,7 @@ function boardGame(game, board) {
   return `
     <div class="game${game.locked ? ' locked' : ''}">
       <div class="game-meta">
-        <span>${teamLabel(game.away_team, game.away_team_abbr)}
-          @ ${teamLabel(game.home_team, game.home_team_abbr)}</span>
+        <span class="fixture">${esc(game.away_team)} @ ${esc(game.home_team)}</span>
         <span>
           ${scored ? `${game.away_score} – ${game.home_score} · ` : ''}
           ${game.status === 'VOID' ? '<span class="badge red">Void</span>'
