@@ -36,6 +36,24 @@ function extractFunction(name) {
   throw new Error(`unbalanced braces in ${name}`);
 }
 
+// Some builders lean on a module-scope constant (the abbreviation map, say),
+// which the function extractor above does not pull. Grabs `const NAME = ...;`
+// by brace matching the same way.
+function extractConst(name) {
+  const start = SOURCE.indexOf(`const ${name} = `);
+  assert.notEqual(start, -1, `${name} not found in app.js`);
+
+  let depth = 0;
+  for (let i = SOURCE.indexOf('{', start); i < SOURCE.length; i += 1) {
+    if (SOURCE[i] === '{') depth += 1;
+    else if (SOURCE[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return `${SOURCE.slice(start, i + 1)};`;
+    }
+  }
+  throw new Error(`unbalanced braces in ${name}`);
+}
+
 // The handful of helpers the builders call. Stand-ins, not the real ones —
 // this is checking scope and structure, not formatting.
 const HELPERS = `
@@ -76,21 +94,6 @@ const historyPayload = (filters) => ({
   page: { limit: 25, offset: 0, total: 1, has_more: false },
   summary: { total: 1, staked: 100, net: 0 },
   filters,
-});
-
-test('the My bets table renders', () => {
-  const html = render('betHistoryTable', {
-    bets: [BET],
-    summary: { total: 1, won: 0, lost: 0, pushed: 0, voided: 0, staked: 100, net: 0 },
-  });
-  assert.match(html, /New England -3\.5/);
-  // It has no filters — its date column is always the placement time.
-  assert.match(html, /<th>Placed<\/th>/);
-});
-
-test('the My bets table handles an empty history', () => {
-  const html = render('betHistoryTable', { bets: [], summary: {} });
-  assert.match(html, /No bets yet/);
 });
 
 test('the pool history table renders and defaults to the kickoff column', () => {
@@ -207,12 +210,65 @@ test('a hostile username cannot escape the pool history table', () => {
   assertNeutralised(html, 'pool history');
 });
 
-test('hostile team names cannot escape the My bets table', () => {
-  const html = renderWithEsc('betHistoryTable', {
+// The My bets table is gone — History covers it with filters — but team names
+// still reach the screen through the pool history table, so the escaping this
+// used to guard has to follow them rather than be deleted with the table.
+test('hostile team names cannot escape the pool history table', () => {
+  const html = renderWithEsc('poolHistoryTable', {
     bets: [{ ...BET, home_team: HOSTILE, away_team: HOSTILE_ATTR, description: HOSTILE }],
-    summary: { total: 1, won: 0, lost: 0, pushed: 0, voided: 0, staked: 100, net: 0 },
+    page: { limit: 25, offset: 0, total: 1, has_more: false },
+    summary: { total: 1, staked: 100, net: 0 },
+    filters: {},
   });
-  assertNeutralised(html, 'my bets');
+  assertNeutralised(html, 'pool history team names');
+});
+
+// Short team names, issue #13. The board puts a team beside its line and price
+// in one button; at full length that overflows a phone, so both forms are in
+// the markup and CSS picks one.
+test('NFL teams abbreviate to the form people actually read', () => {
+  const shortTeam = new Function(
+    `${extractConst('NFL_ABBR')} ${extractFunction('shortTeam')} return shortTeam;`,
+  )();
+  assert.equal(shortTeam('New England Patriots'), 'NE');
+  assert.equal(shortTeam('Seattle Seahawks'), 'SEA');
+  assert.equal(shortTeam('San Francisco 49ers'), 'SF');
+  assert.equal(shortTeam('Los Angeles Rams'), 'LAR');
+  assert.equal(shortTeam('Los Angeles Chargers'), 'LAC');
+});
+
+// College has 230-odd teams and no agreed abbreviation, so anything unmapped is
+// derived rather than left at full length.
+test('unmapped teams derive a short name', () => {
+  const shortTeam = new Function(
+    `${extractConst('NFL_ABBR')} ${extractFunction('shortTeam')} return shortTeam;`,
+  )();
+  assert.equal(shortTeam('Ohio State Buckeyes'), 'OS');
+  // A two-word nickname cannot be spotted without a team list, so this gives
+  // NCT rather than the canonical UNC. Pinned so the derivation is at least
+  // stable — the same fixture must not abbreviate two different ways.
+  assert.equal(shortTeam('North Carolina Tar Heels'), 'NCT');
+  // A single-word school keeps letters rather than becoming one initial.
+  assert.equal(shortTeam('Alabama Crimson'), 'ALA');
+  // "Army" is the whole name, not a nickname — never strip it to nothing.
+  assert.equal(shortTeam('Army'), 'ARM');
+  assert.equal(shortTeam(''), '');
+});
+
+// Issue #14: the quick filters set the controls below them, so a chip that
+// cannot map onto a real control must not be offered at all. In week 1 "Last
+// week" would carry week 0, which no season has.
+test('quick filters only offer weeks that exist', () => {
+  const quickFilters = new Function(
+    `${realEsc()} ${extractFunction('quickFilters')} return quickFilters;`,
+  )();
+  const labels = (userId, week) => (quickFilters({}, userId, week).match(/>[^<>]+<\/button>/g) ?? [])
+    .map((m) => m.slice(1, -'</button>'.length));
+
+  assert.deepEqual(labels('u1', 1), ['My bets', 'This week']);
+  assert.deepEqual(labels('u1', 2), ['My bets', 'This week', 'Last week']);
+  assert.deepEqual(labels('u1', null), ['My bets']);
+  assert.deepEqual(labels('', 5), ['This week', 'Last week']);
 });
 
 test('esc() covers the five characters that matter', () => {

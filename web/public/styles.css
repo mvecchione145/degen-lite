@@ -458,3 +458,38 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 420px) {
   .avatar-grid { grid-template-columns: repeat(6, 1fr); }
 }
+
+/* Quick filters above the bet filter bar. Chips rather than another row of
+   selects: they answer the three questions people open the tab to ask. */
+.quick-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chip {
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+}
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Short team names replace full ones only where the full one will not fit. */
+.team-short { display: none; }
+
+@media (max-width: 560px) {
+  .team-long { display: none; }
+  .team-short { display: inline; }
+
+  /* Four tabs (five with Manage) have to share one row on a phone. */
+  .tabs { gap: 4px; }
+  .tabs button { padding: 8px 4px; font-size: 13px; min-width: 0; }
+
+  /* The week strip is five wide; let the buttons shrink rather than wrap. */
+  .week-nav { flex-wrap: nowrap; gap: 4px; }
+  .week-nav button { padding: 8px 6px; font-size: 13px; min-width: 0; flex: 1; }
+  .week-nav .week-shift { flex: 0 0 auto; padding: 8px 8px; }
+
+  /* Long fixture lines wrap instead of pushing the card wide. */
+  .game-meta { flex-wrap: wrap; }
+  .market-btn { padding: 8px; }
+}

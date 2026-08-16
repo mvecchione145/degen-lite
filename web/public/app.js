@@ -565,13 +565,79 @@ function balanceStrip(balance, pool, standing) {
     </div>`;
 }
 
+/* ------------------------------------------------------------ team names */
+
+// The board shows a team per button beside its line and price. At full length
+// ("New England Patriots") that overflows a phone, so the markup carries both
+// forms and CSS picks one at the breakpoint — no resize listener, and no
+// guessing the viewport in JS.
+const NFL_ABBR = {
+  'Arizona Cardinals': 'ARI',
+  'Atlanta Falcons': 'ATL',
+  'Baltimore Ravens': 'BAL',
+  'Buffalo Bills': 'BUF',
+  'Carolina Panthers': 'CAR',
+  'Chicago Bears': 'CHI',
+  'Cincinnati Bengals': 'CIN',
+  'Cleveland Browns': 'CLE',
+  'Dallas Cowboys': 'DAL',
+  'Denver Broncos': 'DEN',
+  'Detroit Lions': 'DET',
+  'Green Bay Packers': 'GB',
+  'Houston Texans': 'HOU',
+  'Indianapolis Colts': 'IND',
+  'Jacksonville Jaguars': 'JAX',
+  'Kansas City Chiefs': 'KC',
+  'Las Vegas Raiders': 'LV',
+  'Los Angeles Chargers': 'LAC',
+  'Los Angeles Rams': 'LAR',
+  'Miami Dolphins': 'MIA',
+  'Minnesota Vikings': 'MIN',
+  'New England Patriots': 'NE',
+  'New Orleans Saints': 'NO',
+  'New York Giants': 'NYG',
+  'New York Jets': 'NYJ',
+  'Philadelphia Eagles': 'PHI',
+  'Pittsburgh Steelers': 'PIT',
+  'San Francisco 49ers': 'SF',
+  'Seattle Seahawks': 'SEA',
+  'Tampa Bay Buccaneers': 'TB',
+  'Tennessee Titans': 'TEN',
+  'Washington Commanders': 'WAS',
+};
+
+// College has 230-odd teams and no abbreviation anyone agrees on, so the map
+// covers the NFL — where the short forms are the ones people actually read —
+// and everything else is derived. Drop the trailing nickname, then take
+// initials from a multi-word school ("Ohio State" -> OS) or the first three
+// letters of a single-word one ("Alabama" -> ALA).
+//
+// A two-word nickname is not detectable without a team list, so "North Carolina
+// Tar Heels" gives NCT rather than the canonical UNC. Short and stable beats
+// canonical here: the derived form only has to fit the button and stay the same
+// every time the fixture appears.
+function shortTeam(name) {
+  const full = String(name ?? '');
+  if (NFL_ABBR[full]) return NFL_ABBR[full];
+
+  const words = full.trim().split(/\s+/);
+  // "Army" is the whole name, not a nickname — never strip to nothing.
+  const school = words.length > 1 ? words.slice(0, -1) : words;
+  if (school.length > 1) return school.map((w) => w[0]).join('').toUpperCase().slice(0, 4);
+  return (school[0] ?? full).slice(0, 3).toUpperCase();
+}
+
+// Both forms, for anywhere the full name will not fit on a phone.
+const teamLabel = (name) => `<span class="team-long">${esc(name)}</span>`
+  + `<span class="team-short">${esc(shortTeam(name))}</span>`;
+
 function marketButton(game, market, selection, board) {
   const line = market === 'SPREAD'
     ? (selection === 'HOME' ? game.spread : -game.spread)
     : game.total;
   const label = market === 'SPREAD'
-    ? (selection === 'HOME' ? game.home_team : game.away_team)
-    : (selection === 'OVER' ? 'Over' : 'Under');
+    ? teamLabel(selection === 'HOME' ? game.home_team : game.away_team)
+    : esc(selection === 'OVER' ? 'Over' : 'Under');
   const display = market === 'SPREAD' ? fmtLine(line) : line;
 
   const active = state.slip
@@ -587,7 +653,7 @@ function marketButton(game, market, selection, board) {
     <button class="market-btn" type="button" aria-pressed="${Boolean(active)}"
             data-bet="${esc(game.id)}|${market}|${selection}"
             ${disabled ? 'disabled' : ''}>
-      <span class="market-name">${esc(label)}</span>
+      <span class="market-name">${label}</span>
       <span class="market-line">${unavailable ? '—' : esc(display)}</span>
       <span class="market-price">${board.price}</span>
     </button>`;
@@ -711,7 +777,7 @@ function boardGame(game, board) {
   return `
     <div class="game${game.locked ? ' locked' : ''}">
       <div class="game-meta">
-        <span>${esc(game.away_team)} @ ${esc(game.home_team)}</span>
+        <span>${teamLabel(game.away_team)} @ ${teamLabel(game.home_team)}</span>
         <span>
           ${scored ? `${game.away_score} – ${game.home_score} · ` : ''}
           ${game.status === 'VOID' ? '<span class="badge red">Void</span>'
@@ -748,44 +814,6 @@ function boardGame(game, board) {
     </div>`;
 }
 
-function betHistoryTable(history) {
-  if (history.bets.length === 0) {
-    return '<p class="muted">No bets yet. Place one from the board.</p>';
-  }
-  const s = history.summary;
-  return `
-    <p class="muted small" style="margin-top:0">
-      ${s.total} bets · ${s.won}W ${s.lost}L ${s.pushed}P${s.voided ? ` ${s.voided}V` : ''} ·
-      staked ${fmtMoney(s.staked)} ·
-      net <span class="${s.net >= 0 ? 'pos' : 'neg'}">${fmtSigned(s.net)}</span>
-    </p>
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Status</th><th>Wager</th><th>Game</th>
-            <th class="num">Stake</th><th class="num">Net</th><th>Placed</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${history.bets.map((bet) => `
-            <tr>
-              <td><span class="badge ${BET_STATUS_CLASS[bet.status]}">${bet.status}</span></td>
-              <td>${esc(bet.description)} <span class="muted small">${bet.price}</span></td>
-              <td class="muted small">
-                W${bet.week} · ${esc(bet.away_team)} @ ${esc(bet.home_team)}
-                ${bet.home_score !== null ? ` (${bet.away_score}–${bet.home_score})` : ''}
-              </td>
-              <td class="num">${fmtMoney(bet.stake)}</td>
-              <td class="num ${bet.net > 0 ? 'pos' : bet.net < 0 ? 'neg' : ''}">
-                ${bet.net === null ? '—' : fmtSigned(bet.net)}
-              </td>
-              <td class="muted small">${fmtKickoff(bet.placed_at)}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>
-    </div>`;
-}
 
 /* ------------------------------------------------ commissioner controls */
 
@@ -959,12 +987,40 @@ function historyQuery(filters, offset) {
   return params.toString();
 }
 
-function historyFilterBar(pool, members, filters) {
+// Shortcuts for the three questions people actually open this tab to ask.
+// Each one is a set of values for the controls below rather than a mode of its
+// own, so the filter bar always shows what is applied and Clear still undoes
+// it — a quick filter with hidden state would be a second source of truth.
+function quickFilters(filters, myUserId, currentWeek) {
+  const week = Number(currentWeek);
+  const hasWeek = Number.isInteger(week) && week >= 1;
+
+  const chips = [];
+  if (myUserId) chips.push({ label: 'My bets', set: { user_id: myUserId } });
+  if (hasWeek) chips.push({ label: 'This week', set: { week: String(week) } });
+  // Only from week 2. Offered in week 1 it would carry week 0, which is not a
+  // week the season has — the select would have no such option and the chip
+  // would sit there doing nothing.
+  if (hasWeek && week > 1) chips.push({ label: 'Last week', set: { week: String(week - 1) } });
+
+  return `
+    <div class="quick-filters">
+      ${chips.map((c) => {
+    const on = Object.entries(c.set).every(([k, v]) => (filters[k] ?? '') === v);
+    return `<button class="chip" data-quick="${esc(JSON.stringify(c.set))}"
+                    aria-pressed="${on}">${esc(c.label)}</button>`;
+  }).join('')}
+    </div>`;
+}
+
+function historyFilterBar(pool, members, filters, { myUserId, currentWeek, weeks = [] } = {}) {
   const opt = (value, label, selected) =>
     `<option value="${esc(value)}"${value === selected ? ' selected' : ''}>${esc(label)}</option>`;
   const leagues = pool.leagues ?? ['NFL'];
+  const weekNumbers = weeks.map((w) => w.week);
 
   return `
+    ${quickFilters(filters, myUserId, currentWeek)}
     <div class="filters" id="history-filters">
       <label>Member
         <select name="user_id">
@@ -979,6 +1035,12 @@ function historyFilterBar(pool, members, filters) {
             ${leagues.map((id) => opt(id, LEAGUE_LABELS[id] ?? id, filters.league ?? '')).join('')}
           </select>
         </label>` : ''}
+      <label>Week
+        <select name="week">
+          ${opt('', 'Any', filters.week ?? '')}
+          ${weekNumbers.map((w) => opt(String(w), `W${w}`, filters.week ?? '')).join('')}
+        </select>
+      </label>
       <label>Status
         <select name="status">
           ${opt('', 'Any', filters.status ?? '')}
@@ -1081,7 +1143,7 @@ function boardHash(poolId, leagues, league, week) {
 }
 
 // Weeks shown either side of the open week before the arrows are needed.
-const WEEK_NAV_RADIUS = 3;
+const WEEK_NAV_RADIUS = 2;
 const WEEK_NAV_SIZE = WEEK_NAV_RADIUS * 2 + 1;
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -1138,9 +1200,8 @@ async function renderSharksPool(detail, week) {
   const league = detail.league;
   const leagues = detail.pool.leagues ?? ['NFL'];
   const isCommish = Boolean(detail.is_commissioner);
-  const [board, history, leaderboard, log, pending] = await Promise.all([
+  const [board, leaderboard, log, pending] = await Promise.all([
     api(`/pools/${poolId}/board?league=${league}&week=${week}`),
-    api(`/pools/${poolId}/bets`),
     api(`/pools/${poolId}/leaderboard`),
     api(`/pools/${poolId}/events`),
     // Only the commissioner may read this, so only they ask for it.
@@ -1256,8 +1317,7 @@ async function renderSharksPool(detail, week) {
 
     <div class="tabs">
       <button data-view="board" aria-selected="${state.tab === 'board'}">Board</button>
-      <button data-view="bets" aria-selected="${state.tab === 'bets'}">My bets</button>
-      <button data-view="history" aria-selected="${state.tab === 'history'}">History</button>
+      <button data-view="bets" aria-selected="${state.tab === 'bets'}">Bets</button>
       <button data-view="leaderboard" aria-selected="${state.tab === 'leaderboard'}">Leaderboard</button>
       ${isCommish
     ? `<button data-view="manage" aria-selected="${state.tab === 'manage'}">Manage</button>` : ''}
@@ -1287,17 +1347,16 @@ async function renderSharksPool(detail, week) {
     </div>
 
     <div class="card" data-panel="bets" ${state.tab === 'bets' ? '' : 'hidden'}>
-      <h2>Bet history</h2>
-      ${betHistoryTable(history)}
-    </div>
-
-    <div class="card" data-panel="history" ${state.tab === 'history' ? '' : 'hidden'}>
       <div class="row-between" style="margin-bottom:12px;">
-        <h2 style="margin:0">Pool history</h2>
+        <h2 style="margin:0">Bets</h2>
         <span class="muted small">Every member's bets, newest first</span>
       </div>
       ${historyFilterBar(pool, detail.members, state.history.poolId === poolId
-    ? (state.history.filters ?? {}) : {})}
+    ? (state.history.filters ?? {}) : {}, {
+    myUserId: state.user?.id,
+    currentWeek: detail.current_week,
+    weeks: detail.weeks,
+  })}
       <div id="history-body"><p class="muted">Loading…</p></div>
     </div>
 
@@ -1328,10 +1387,25 @@ async function renderSharksPool(detail, week) {
 
   // Fetched on demand rather than alongside the board: it is the one panel
   // whose contents are paginated, and most visits never open it.
+  // loadHistory only swaps the results, so the chips have to be restated by
+  // hand — otherwise a chip clicked once stays pressed after its fields are
+  // cleared by something else.
+  function syncQuickFilters() {
+    const bar = app.querySelector('#history-filters');
+    if (!bar) return;
+    app.querySelectorAll('[data-quick]').forEach((chip) => {
+      const set = JSON.parse(chip.dataset.quick);
+      const on = Object.entries(set)
+        .every(([name, value]) => bar.querySelector(`[name="${name}"]`)?.value === value);
+      chip.setAttribute('aria-pressed', String(on));
+    });
+  }
+
   async function loadHistory(offset, filters = state.history.filters ?? {}) {
     const body = app.querySelector('#history-body');
     if (!body) return;
     state.history = { poolId, offset, filters };
+    syncQuickFilters();
     body.innerHTML = '<p class="muted">Loading…</p>';
     try {
       const data = await api(
@@ -1361,6 +1435,22 @@ async function renderSharksPool(detail, week) {
       });
       loadHistory(0, {});
     });
+
+    // A quick filter writes into the controls and reloads, so the bar always
+    // shows what is applied. Pressing the active one again clears just that
+    // chip's fields rather than everything, which is what "toggle" has to mean
+    // when two chips can be on at once.
+    app.querySelectorAll('[data-quick]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const set = JSON.parse(chip.dataset.quick);
+        const on = chip.getAttribute('aria-pressed') === 'true';
+        Object.entries(set).forEach(([name, value]) => {
+          const el = bar.querySelector(`[name="${name}"]`);
+          if (el) el.value = on ? '' : value;
+        });
+        loadHistory(0, readHistoryFilters());
+      });
+    });
   }
 
   const historyStart = () => (state.history.poolId === poolId ? state.history.offset : 0);
@@ -1375,7 +1465,7 @@ async function renderSharksPool(detail, week) {
         panel.hidden = panel.dataset.panel !== state.tab;
       });
       // Re-fetched on every open so a settled bet is not shown as pending.
-      if (state.tab === 'history') loadHistory(historyStart(), readHistoryFilters());
+      if (state.tab === 'bets') loadHistory(historyStart(), readHistoryFilters());
     });
   });
 
@@ -1429,7 +1519,7 @@ async function renderSharksPool(detail, week) {
   // The tab survives a repaint, so a bet placed while History was open lands
   // back on History — with an empty panel unless it is filled here too.
   wireHistoryFilters();
-  if (state.tab === 'history') loadHistory(historyStart(), readHistoryFilters());
+  if (state.tab === 'bets') loadHistory(historyStart(), readHistoryFilters());
 
   wireWeekNav(detail.weeks, week, poolId, league, (selected) => {
     state.slip = null;
