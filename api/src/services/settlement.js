@@ -173,15 +173,17 @@ async function settlePicks(client) {
   // or sitting a week out would be strictly safer than playing it and the
   // format would be optional.
   //
-  // Only weeks that have finished count, and only those the member could have
-  // played: joined before the week's *last* kickoff, so they had at least one
-  // game still to pick from. The last rather than the first, because somebody
-  // joining on Sunday after a Thursday game can still take a Sunday team — that
-  // week is theirs to answer for. Nobody is eliminated for weeks that ran before
-  // they arrived, or before the pool existed.
+  // Only weeks that have finished count, and only from the week a member
+  // joined — `active_from_week`, recorded at join. Nobody is eliminated for
+  // weeks that ran before they arrived, or before the pool existed.
+  //
+  // The floor is a stored week rather than a comparison against `joined_at`,
+  // because kickoff times move. /admin/simulate rewrites them three hours into
+  // the past to make a week read as played, which made every member who was
+  // already in the pool look like a late arrival and excused them all.
   const { rows: eliminated } = await client.query(
     `WITH concluded AS (
-        SELECT po.id AS pool_id, g.week, MAX(g.kickoff_time) AS last_kickoff
+        SELECT po.id AS pool_id, g.week
           FROM pools po
           JOIN games g ON g.league = po.leagues[1] AND g.season = po.season
          WHERE po.pool_type = 'SURVIVOR'
@@ -195,7 +197,7 @@ async function settlePicks(client) {
           JOIN pools po ON po.id = m.pool_id AND po.pool_type = 'SURVIVOR'
           JOIN concluded c ON c.pool_id = m.pool_id
          WHERE m.withdrawn_at IS NULL
-           AND m.joined_at < c.last_kickoff
+           AND c.week >= COALESCE(m.active_from_week, 1)
            AND NOT EXISTS (
              SELECT 1 FROM picks p
                JOIN games g ON g.id = p.game_id

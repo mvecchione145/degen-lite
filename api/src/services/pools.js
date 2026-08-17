@@ -13,6 +13,30 @@ function generateInviteCode(length = 8) {
   return code;
 }
 
+// The first week of a season that has not finished — where a survivor member's
+// liability begins when they join.
+//
+// Recorded once, as a number. Comparing `joined_at` against kickoff times looks
+// equivalent and is not: kickoffs move, so a week already settled could change
+// who was answerable for it.
+async function firstUnfinishedWeek(client, league, season) {
+  const { rows } = await client.query(
+    `SELECT COALESCE(
+              (SELECT MIN(week) FROM (
+                 SELECT g.week
+                   FROM games g
+                  WHERE g.league = $1 AND g.season = $2
+                  GROUP BY g.week
+                 HAVING BOOL_OR(g.status NOT IN ('FINAL', 'VOID'))
+               ) unfinished),
+              (SELECT MAX(week) + 1 FROM games WHERE league = $1 AND season = $2),
+              1
+            )::INT AS week`,
+    [league, season],
+  );
+  return rows[0]?.week ?? 1;
+}
+
 export async function createPool({
   commissionerId, name, poolType, useSpreads, leagues, season,
   startingBalance, maxBet, minBet, bustPolicy, stipendAmount,
@@ -44,8 +68,10 @@ export async function createPool({
     if (!pool) throw conflict('Could not allocate an invite code, please retry');
 
     await client.query(
-      'INSERT INTO pool_members (pool_id, user_id) VALUES ($1, $2)',
-      [pool.id, commissionerId],
+      'INSERT INTO pool_members (pool_id, user_id, active_from_week) VALUES ($1, $2, $3)',
+      [pool.id, commissionerId, pool.pool_type === 'SURVIVOR'
+        ? await firstUnfinishedWeek(client, pool.leagues[0], pool.season)
+        : null],
     );
     await creditOpening(client, pool, commissionerId);
 
@@ -95,10 +121,19 @@ export async function joinPoolByCode(userId, inviteCode) {
 
     // Only a first join opens a balance, so rejoining stays idempotent and
     // cannot be used to mint another opening credit.
-    //
-    // Survivor needs nothing here: a member is only answerable for weeks that
-    // started after they joined, which settlement reads off `joined_at`.
-    if (joined.length > 0) await creditOpening(client, pool, userId);
+    if (joined.length > 0) {
+      await creditOpening(client, pool, userId);
+
+      // Survivor holds a member answerable for every week from here on,
+      // including by not picking — so somebody arriving in week 9 must not
+      // inherit eight missed weeks.
+      if (pool.pool_type === 'SURVIVOR') {
+        await client.query(
+          'UPDATE pool_members SET active_from_week = $3 WHERE pool_id = $1 AND user_id = $2',
+          [pool.id, userId, await firstUnfinishedWeek(client, pool.leagues[0], pool.season)],
+        );
+      }
+    }
 
     return pool;
   });

@@ -96,6 +96,15 @@ CREATE TABLE pool_members (
     is_eliminated BOOLEAN NOT NULL DEFAULT FALSE,
     eliminated_week INT,
     rebuys_used INT NOT NULL DEFAULT 0,
+    -- Survivor: the first week this member can be eliminated for, recorded when
+    -- they join. NULL means from the start of the season.
+    --
+    -- A week number rather than a comparison against `joined_at`, because
+    -- kickoff times move: /admin/simulate rewrites them into the past to make a
+    -- week read as played, and a rescheduled fixture shifts them for real. Both
+    -- would silently change who was answerable for a week that has already been
+    -- settled. The week a member arrived does not move.
+    active_from_week INT,
     withdrawn_at TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (pool_id, user_id)
 );

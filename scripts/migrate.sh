@@ -42,6 +42,11 @@ require_db
 # so a missing item is obvious at a glance.
 report() {
   psql_run -tAc "
+    SELECT 'pool_members.active_from   : ' || CASE WHEN EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'pool_members' AND column_name = 'active_from_week'
+    ) THEN 'present' ELSE 'MISSING' END
+    UNION ALL
     SELECT 'pool_members.withdrawn_at : ' || CASE WHEN EXISTS (
       SELECT 1 FROM information_schema.columns
        WHERE table_name = 'pool_members' AND column_name = 'withdrawn_at'
@@ -87,10 +92,15 @@ BEGIN;
 ALTER TABLE pool_members
   ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMP WITH TIME ZONE;
 
--- Briefly carried a survivor `active_from_week`. Standing is derived from
--- losses against rebuys instead, which needs no stored floor, so drop it rather
--- than leave a column nothing reads.
-ALTER TABLE pool_members DROP COLUMN IF EXISTS active_from_week;
+-- Survivor: the first week a member can be eliminated for. A week number rather
+-- than a comparison against joined_at, because kickoff times move — simulating
+-- a week rewrites them into the past, which would silently excuse everyone who
+-- was already in the pool.
+--
+-- Existing rows are backfilled to week 1: every pool that predates this was
+-- created before its season began, so its members are answerable throughout.
+ALTER TABLE pool_members ADD COLUMN IF NOT EXISTS active_from_week INT;
+UPDATE pool_members SET active_from_week = 1 WHERE active_from_week IS NULL;
 
 CREATE TABLE IF NOT EXISTS pool_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
