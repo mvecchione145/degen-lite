@@ -145,56 +145,98 @@ const AVATAR_CHOICES = [
   '🤖', '👻', '🤠', '🥶', '😎', '🤡', '💀', '🧠',
 ];
 
-function openAvatarPicker() {
-  const current = state.user?.avatar_emoji ?? null;
+function openProfileDialog() {
+  const currentEmoji = state.user?.avatar_emoji ?? null;
+  const currentName = state.user?.display_name ?? '';
 
   const dialog = document.createElement('div');
   dialog.className = 'modal';
   dialog.innerHTML = `
-    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Choose your emoji">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Your profile">
       <div class="row-between" style="margin-bottom:12px">
-        <h2 style="margin:0">Your emoji</h2>
+        <h2 style="margin:0">Your profile</h2>
         <button class="ghost" data-close>Close</button>
       </div>
-      <p class="muted small" style="margin:0 0 12px">
-        Shown beside your name on every leaderboard.
-      </p>
+
+      <div class="field">
+        <label for="display-name">Display name</label>
+        <input id="display-name" name="display_name" maxlength="50"
+               value="${esc(currentName)}"
+               placeholder="${esc(state.user?.username ?? '')}" />
+        <p class="muted small" style="margin:6px 0 0">
+          What the pool sees. Leave it blank to go by your username,
+          <strong>${esc(state.user?.username ?? '')}</strong>.
+        </p>
+      </div>
+
+      <h3 style="margin:18px 0 8px">Emoji</h3>
       <div class="avatar-grid">
         ${AVATAR_CHOICES.map((e) => `
           <button class="avatar-option" data-emoji="${esc(e)}"
-                  aria-pressed="${e === current}">${e}</button>`).join('')}
+                  aria-pressed="${e === currentEmoji}">${e}</button>`).join('')}
       </div>
+
       <div class="row-between" style="margin-top:14px">
-        <button data-clear ${current ? '' : 'disabled'}>Remove emoji</button>
+        <button data-clear-emoji ${currentEmoji ? '' : 'disabled'}>Remove emoji</button>
+        <button class="primary" data-save>Save</button>
       </div>
+      <p class="error" data-error hidden></p>
     </div>`;
 
   const close = () => dialog.remove();
+  const nameInput = () => dialog.querySelector('#display-name');
+  const showError = (message) => {
+    const box = dialog.querySelector('[data-error]');
+    box.textContent = message;
+    box.hidden = false;
+  };
 
-  async function choose(emoji) {
+  // The emoji is chosen by clicking, the name by typing, so the grid only
+  // records a choice — nothing is sent until Save. Otherwise picking an emoji
+  // would quietly discard a half-typed name.
+  let pendingEmoji = currentEmoji;
+  const markEmoji = () => {
+    dialog.querySelectorAll('[data-emoji]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.emoji === pendingEmoji));
+    });
+    dialog.querySelector('[data-clear-emoji]').disabled = !pendingEmoji;
+  };
+
+  async function save() {
+    const typed = nameInput().value.trim();
     try {
-      const { user } = await api('/auth/avatar', {
+      const { user } = await api('/auth/profile', {
         method: 'POST',
-        body: { avatar_emoji: emoji },
+        body: { display_name: typed === '' ? null : typed, avatar_emoji: pendingEmoji },
       });
       state.user = user;
       renderTopbar();
       close();
-      // The leaderboard is rendered from a cached payload that now carries a
-      // stale emoji, so redraw whatever is on screen.
+      // Standings, the commissioner log and every revealed bet name people, so
+      // the whole view is stale once this changes.
       await render();
     } catch (err) {
-      toast(err.message, true);
+      showError(err.message);
     }
   }
 
   dialog.addEventListener('click', (event) => {
-    // Clicking the backdrop dismisses; clicking the card must not.
     if (event.target === dialog || event.target.closest('[data-close]')) return close();
     const option = event.target.closest('[data-emoji]');
-    if (option) return choose(option.dataset.emoji);
-    if (event.target.closest('[data-clear]')) return choose(null);
+    if (option) {
+      pendingEmoji = option.dataset.emoji === pendingEmoji ? null : option.dataset.emoji;
+      return markEmoji();
+    }
+    if (event.target.closest('[data-clear-emoji]')) {
+      pendingEmoji = null;
+      return markEmoji();
+    }
+    if (event.target.closest('[data-save]')) return save();
     return undefined;
+  });
+
+  dialog.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && event.target.matches('#display-name')) save();
   });
 
   document.addEventListener('keydown', function onKey(event) {
@@ -204,20 +246,21 @@ function openAvatarPicker() {
   });
 
   document.body.appendChild(dialog);
+  nameInput().focus();
 }
 
 function renderTopbar() {
   topbarActions.innerHTML = state.user
-    ? `<button class="avatar-pick" data-action="avatar"
-               title="Choose the emoji shown beside your name">
+    ? `<button class="avatar-pick" data-action="profile"
+               title="Edit the name and emoji the pool sees">
          <span class="avatar">${esc(state.user.avatar_emoji || '🙂')}</span>
-         <span class="muted small">${esc(state.user.username)}</span>
+         <span class="muted small">${esc(state.user.display_name || state.user.username)}</span>
        </button>
        <button class="ghost" data-action="logout">Sign out</button>`
     : '';
 
-  topbarActions.querySelector('[data-action="avatar"]')
-    ?.addEventListener('click', openAvatarPicker);
+  topbarActions.querySelector('[data-action="profile"]')
+    ?.addEventListener('click', openProfileDialog);
 
   // Local only: drops the token from this browser. The token itself stays valid
   // until it expires. Invalidating it everywhere is still possible through
@@ -834,7 +877,13 @@ function manageMembers(members = [], commissionerId) {
     const isBoss = m.id === commissionerId;
     const gone = Boolean(m.withdrawn_at);
     return `<tr${gone ? ' class="muted"' : ''}>
-      <td>${esc(m.username)}${isBoss ? ' <span class="badge grey">Commissioner</span>' : ''}</td>
+      <td>
+        ${m.avatar_emoji ? `<span class="avatar">${esc(m.avatar_emoji)}</span>` : ''}
+        ${esc(m.username)}
+        ${m.account_username && m.account_username !== m.username
+    ? `<span class="muted small">@${esc(m.account_username)}</span>` : ''}
+        ${isBoss ? ' <span class="badge grey">Commissioner</span>' : ''}
+      </td>
       <td>${gone
     ? `<span class="badge grey">Removed ${new Date(m.withdrawn_at).toLocaleDateString()}</span>`
     : m.is_eliminated ? '<span class="badge red">Bust</span>' : ''}</td>

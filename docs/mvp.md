@@ -27,8 +27,8 @@ no pools at all, and generates no sports data.
   credited, Redis-cached. Stake at risk is deliberately absent: see below
 - **Bet history** — every wager with the line and price as struck, and running P&L
 - **Reveal** — other members' bets stay hidden until a game kicks off
-- **Emoji avatars** — one emoji per account, shown beside the name on every
-  leaderboard, set from a picker in the header
+- **Profile** — a display name and an emoji per account, shown together
+  wherever the pool names a member, edited from the header
 - **Legacy modes** — Pick'em, Confidence, and Survivor pools remain fully
   playable behind a flag
 
@@ -206,7 +206,7 @@ points requires `Authorization: Bearer <token>`.
 | `POST` | `/auth/register` | `{username, email, password}` → `{token, user}` |
 | `POST` | `/auth/login` | `{login, password}` — `login` is a username or email |
 | `GET` | `/auth/me` | The authenticated user |
-| `POST` | `/auth/avatar` | `{avatar_emoji}` — one emoji, or null to clear it |
+| `POST` | `/auth/profile` | `{display_name?, avatar_emoji?}` — how the pool sees you. An absent field is left alone, null clears it |
 
 ### Pools
 

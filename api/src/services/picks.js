@@ -55,7 +55,7 @@ export async function getWeekView({ poolId, userId, week }) {
   // Other members' picks are only revealed once a game has kicked off.
   const { rows: revealed } = await query(
     `SELECT p.game_id, p.selected_team, p.confidence_rank, p.is_correct,
-            u.username
+            COALESCE(u.display_name, u.username) AS username
        FROM picks p
        JOIN users u ON u.id = p.user_id
        JOIN games g ON g.id = p.game_id

@@ -26,6 +26,12 @@ CREATE TABLE users (
     -- per pool: it is who you are, not how you play in one league. Wide enough
     -- for a ZWJ sequence or a flag, which are several code points each; NULL
     -- means the member has not picked one and the UI shows nothing.
+    -- What other members see. NULL means "go by the username", which is what
+    -- every account starts as. Not unique: two people may both be Mike, and
+    -- forcing a suffix on the second one would be worse than the ambiguity.
+    -- Taking a name that is already somebody's *username* is refused, though —
+    -- that is impersonation, not a coincidence.
+    display_name VARCHAR(50),
     avatar_emoji VARCHAR(24),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

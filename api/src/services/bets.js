@@ -236,7 +236,8 @@ export async function getBoard({ poolId, userId, league, week }) {
   // longer be acted on.
   const { rows: revealed } = await query(
     `SELECT b.game_id, b.market, b.selection, b.line, b.stake::NUMERIC AS stake,
-            b.status, b.net::NUMERIC AS net, u.username
+            b.status, b.net::NUMERIC AS net,
+            COALESCE(u.display_name, u.username) AS username
        FROM bets b
        JOIN users u ON u.id = b.user_id
        JOIN games g ON g.id = b.game_id
@@ -349,7 +350,8 @@ export async function listPoolBets({
   // total of zero and strand the pager on an empty page.
   const [page, totals] = await Promise.all([
     query(
-      `SELECT b.id, b.user_id, u.username, b.game_id, b.market, b.selection,
+      `SELECT b.id, b.user_id, COALESCE(u.display_name, u.username) AS username,
+              b.game_id, b.market, b.selection,
               b.line, b.price, b.stake::NUMERIC AS stake, b.status,
               b.net::NUMERIC AS net, b.placed_at, b.settled_at,
               g.league, g.week, g.home_team, g.away_team, g.kickoff_time,
@@ -478,7 +480,8 @@ export async function listPendingForCommissioner({ poolId, actorId }) {
 
   const { rows } = await query(
     `SELECT b.id, b.market, b.stake::NUMERIC AS stake, b.placed_at,
-            u.username, g.home_team, g.away_team, g.kickoff_time,
+            COALESCE(u.display_name, u.username) AS username,
+            g.home_team, g.away_team, g.kickoff_time,
             (g.kickoff_time <= CURRENT_TIMESTAMP) AS revealed,
             CASE WHEN g.kickoff_time <= CURRENT_TIMESTAMP
                  THEN b.selection END AS selection,

@@ -38,6 +38,7 @@ CREATE TABLE users (
     password_hash TEXT NOT NULL,
     can_create_pools BOOLEAN NOT NULL DEFAULT FALSE,
     token_version INT NOT NULL DEFAULT 0,
+    display_name VARCHAR(50),
     avatar_emoji VARCHAR(24),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -51,6 +52,13 @@ CREATE TABLE users (
   Bumping it fails every token issued before now, which is the only way to end a
   session given a signed token is otherwise valid until it expires. Raised by a
   password change and by `/auth/sign-out-everywhere`.
+- `display_name` — what other members see. NULL means "go by the username",
+  which is what every account starts as. Deliberately **not** unique: two people
+  may both be Mike, and forcing a suffix on the second would be worse than the
+  ambiguity. Taking a name that is already somebody else's *username* is refused
+  though — the standings and the commissioner log both name people, so that is
+  impersonation rather than a collision. Every display query resolves
+  `COALESCE(display_name, username)`, so a member who sets nothing is unaffected.
 - `avatar_emoji` — one emoji, shown beside the name on every leaderboard. Per
   account rather than per pool membership: it is who you are, not how you play
   in one league. Wide enough for a ZWJ sequence or a flag, which run to several

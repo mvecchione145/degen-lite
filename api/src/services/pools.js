@@ -103,7 +103,7 @@ export async function joinPoolByCode(userId, inviteCode) {
 
 export async function listPoolsForUser(userId) {
   const { rows } = await query(
-    `SELECT p.*, u.username AS commissioner_username,
+    `SELECT p.*, COALESCE(u.display_name, u.username) AS commissioner_username,
             pm.is_eliminated, pm.eliminated_week,
             (SELECT COUNT(*)::INT FROM pool_members m WHERE m.pool_id = p.id) AS member_count,
             COALESCE((SELECT SUM(amount) FROM ledger_entries le
@@ -122,7 +122,7 @@ export async function listPoolsForUser(userId) {
 export async function getPoolWithMembership(poolId, userId, client = null) {
   const runner = client ?? { query };
   const { rows } = await runner.query(
-    `SELECT p.*, u.username AS commissioner_username,
+    `SELECT p.*, COALESCE(u.display_name, u.username) AS commissioner_username,
             pm.user_id AS member_user_id, pm.is_eliminated, pm.eliminated_week,
             pm.withdrawn_at
        FROM pools p
@@ -168,7 +168,8 @@ export async function requireMembership(poolId, userId, client = null) {
 
 export async function listMembers(poolId) {
   const { rows } = await query(
-    `SELECT u.id, u.username, u.avatar_emoji,
+    `SELECT u.id, COALESCE(u.display_name, u.username) AS username,
+            u.username AS account_username, u.avatar_emoji,
             pm.joined_at, pm.is_eliminated, pm.eliminated_week,
             pm.withdrawn_at
        FROM pool_members pm
@@ -295,8 +296,8 @@ export async function reinstateMember({ poolId, actorId, targetUserId, reason })
 export async function listPoolEvents(poolId, limit = 50) {
   const { rows } = await query(
     `SELECT e.id, e.kind, e.reason, e.created_at,
-            actor.username AS actor_username,
-            target.username AS target_username,
+            COALESCE(actor.display_name, actor.username) AS actor_username,
+            COALESCE(target.display_name, target.username) AS target_username,
             e.bet_id, b.market, b.selection, b.line, b.stake::NUMERIC AS stake,
             g.home_team, g.away_team,
             NULL::NUMERIC AS amount
@@ -314,7 +315,7 @@ export async function listPoolEvents(poolId, limit = 50) {
       SELECT le.id,
              CASE le.entry_type WHEN 'OPENING' THEN 'BUY_IN' ELSE 'REBUY' END,
              NULL, le.created_at,
-             NULL, u.username,
+             NULL, COALESCE(u.display_name, u.username),
              NULL, NULL, NULL, NULL, NULL,
              NULL, NULL,
              le.amount::NUMERIC
