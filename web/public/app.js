@@ -923,6 +923,19 @@ function managePending(bets = []) {
     </tbody></table></div>`;
 }
 
+// The account's email on hover, so a standings row can be tied back to a
+// person. A display name is free text and need not be unique, so two rows
+// reading "Mike" are otherwise indistinguishable; an email is unique by schema,
+// which is what makes it enough on its own.
+//
+// Returns the whole attribute rather than its contents, so a row that arrives
+// without an email renders no title at all instead of an empty tooltip.
+// Escaped because it lands inside a quoted attribute.
+function accountTitle(row) {
+  if (!row.account_email) return '';
+  return `title="${esc(row.account_email)}"`;
+}
+
 function wagerLeaderboard(leaderboard, pool, currentUserId) {
   const showCredited = pool.bust_policy !== 'ELIMINATE';
   return `
@@ -944,7 +957,7 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
               <td class="num">${row.rank}</td>
               <td class="${row.is_eliminated ? 'eliminated' : ''}">
                 ${row.avatar_emoji ? `<span class="avatar">${esc(row.avatar_emoji)}</span>` : ''}
-                ${esc(row.username)}
+                <span class="named" ${accountTitle(row)}>${esc(row.username)}</span>
                 ${row.is_eliminated ? '<span class="badge red">Bust</span>' : ''}
                 ${row.rebuys_used > 0 ? `<span class="badge grey">${row.rebuys_used}× rebuy</span>` : ''}
               </td>
@@ -1699,7 +1712,7 @@ function pickLeaderboard(leaderboard, poolType, currentUserId) {
           <tr class="${row.user_id === currentUserId ? 'me' : ''}">
             <td class="num">${row.rank}</td>
             <td class="${row.is_eliminated ? 'eliminated' : ''}">
-              ${esc(row.username)}
+              <span class="named" ${accountTitle(row)}>${esc(row.username)}</span>
               ${row.is_eliminated
     ? `<span class="badge red">Out W${row.eliminated_week ?? '?'}</span>` : ''}
             </td>

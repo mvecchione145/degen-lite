@@ -505,6 +505,13 @@ async function main() {
   check('and fall back to the username once it is cleared',
     unnamed.data.standings.some((s) => s.username === 'admin'),
     JSON.stringify(unnamed.data.standings.map((s) => s.username)));
+
+  // A display name need not be unique, so a standings row carries the account's
+  // email for the tooltip that tells two members of the same name apart.
+  check('a standings row carries the account email',
+    unnamed.data.standings.every((s) => typeof s.account_email === 'string'
+      && s.account_email.includes('@')),
+    JSON.stringify(unnamed.data.standings.map((s) => s.account_email)));
   // A stake leaves the balance the moment it is placed, so publishing a
   // spendable balance would tell the pool how much a rival has committed
   // before their game kicks off. Standings carry the settled figure instead,
