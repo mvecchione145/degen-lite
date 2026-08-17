@@ -359,6 +359,11 @@ The footer shows the commit the web bundle was built from, linking to it on the
 remote. The container has no `.git`, so `web/Dockerfile` takes `GIT_COMMIT` and
 `GIT_REPO_URL` as build arguments and writes them into `build-info.js`.
 
+`scripts/compose.sh rebuild [service]` is the shorthand for `up -d --build`,
+which is what actually picks up a client edit — the flags have to precede the
+service name or compose rebuilds nothing while still reporting the container
+started.
+
 `scripts/lib/build-stamp.sh` resolves both from the working tree, and both
 deploy paths source it — `scripts/compose.sh` on a laptop and
 `scripts/prod-deploy.sh` on the server — so the two stamp images identically.

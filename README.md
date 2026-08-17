@@ -94,12 +94,18 @@ not collide with local installs.
 ## Common commands
 
 ```bash
+./scripts/compose.sh rebuild web     # after editing web/public/*
+./scripts/compose.sh rebuild         # rebuild and restart everything
 docker compose logs -f api worker    # follow application logs
 docker compose down                  # stop, keeping data
 docker compose down -v               # stop and wipe the database
-docker compose up -d --build         # rebuild after code changes
 psql postgres://leaguepicks:leaguepicks@localhost:5433/leaguepicks
 ```
+
+The client is baked into the `web` image rather than mounted, so an edit under
+`web/public/` is invisible until that image is rebuilt — and a plain restart
+serves the old bundle while reporting success. `rebuild` is the shorthand;
+add `--no-cache` to ignore the layer cache entirely.
 
 The bootstrap SQL only runs when the volume is empty, so `down -v` is how you get
 a clean database — the schedule and lines are then re-pulled from the feeds.
