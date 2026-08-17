@@ -884,7 +884,6 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
             <th class="num" style="width:48px">#</th>
             <th>Member</th>
             <th class="num">Balance</th>
-            <th class="num">At risk</th>
             <th class="num">Net</th>
             ${showCredited ? '<th class="num">Credited</th>' : ''}
             <th class="num">W</th><th class="num">L</th><th class="num">P</th>
@@ -901,7 +900,6 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
                 ${row.rebuys_used > 0 ? `<span class="badge grey">${row.rebuys_used}× rebuy</span>` : ''}
               </td>
               <td class="num">${fmtMoney(row.balance)}</td>
-              <td class="num muted">${fmtMoney(row.at_risk)}</td>
               <td class="num ${row.net_profit >= 0 ? 'pos' : 'neg'}">${fmtSigned(row.net_profit)}</td>
               ${showCredited ? `<td class="num muted">${fmtMoney(row.total_credited)}</td>` : ''}
               <td class="num">${row.wins}</td>
@@ -912,7 +910,9 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
       </table>
     </div>
     <p class="muted small">
-      Ranked by balance. Updated ${new Date(leaderboard.computed_at).toLocaleTimeString()}
+      Ranked by settled balance — wagers still running are not counted until
+      their game kicks off.
+      Updated ${new Date(leaderboard.computed_at).toLocaleTimeString()}
       ${leaderboard.cached ? '· from cache' : '· freshly computed'}
     </p>`;
 }

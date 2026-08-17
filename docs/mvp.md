@@ -23,8 +23,8 @@ no pools at all, and generates no sports data.
 - **Settlement** — automatic grading once games go final, covering wins, losses,
   pushes, and voids for abandoned games
 - **Bust policies** — elimination, weekly top-up, and rebuy
-- **Leaderboards** — ranked on balance, with stake at risk, net profit, and total
-  credited, Redis-cached
+- **Leaderboards** — ranked on settled balance, with net profit and total
+  credited, Redis-cached. Stake at risk is deliberately absent: see below
 - **Bet history** — every wager with the line and price as struck, and running P&L
 - **Reveal** — other members' bets stay hidden until a game kicks off
 - **Emoji avatars** — one emoji per account, shown beside the name on every
@@ -143,6 +143,22 @@ authenticated endpoint added to the file inherited the same trap.
 `loginAccountLimiter` additionally keys on the account being attempted and
 counts failures only, so typing your own password correctly all day never
 touches it.
+
+### What the standings may show
+
+Standings carry a **settled** balance — what a member would hold if every wager
+still running were voided — rather than their spendable one.
+
+That is not cosmetic. A stake leaves the balance the moment it is placed, so a
+spendable balance is the settled figure minus whatever is at risk, and
+publishing it tells the rest of the pool exactly how much a rival has committed
+before their game kicks off. The reveal rule already hides *which side* they
+took; this is the other half of the same secret, and leaving it out of the
+standings is what makes the reveal rule worth having.
+
+`at_risk` is therefore dropped from the leaderboard payload rather than merely
+hidden in the table — anyone can read the API. A member's own exposure is still
+their own to see and comes from `/pools/:id/balance`.
 
 ## Rules enforced in the application
 

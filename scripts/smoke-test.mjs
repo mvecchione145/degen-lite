@@ -230,6 +230,11 @@ async function main() {
   check('the stake leaves the balance immediately', afterFirst.data.balance === 9900,
     JSON.stringify(afterFirst.data));
   check('the stake shows as at risk', afterFirst.data.at_risk === 100);
+  // ...to its owner. The standings must not move on an unsettled wager.
+  check('a live wager does not move the standings',
+    (await call(`/pools/${poolId}/leaderboard`, { token })).data.standings
+      .find((s) => s.username === 'admin')?.balance === 10000,
+    'a drop here would reveal the stake to the rest of the pool');
 
   check('a stake below one whole unit is refused',
     (await call(`/pools/${poolId}/bets`, {
@@ -460,6 +465,13 @@ async function main() {
   const quietId = quietPool.data.pool.id;
   const freshBoard = await call(`/pools/${quietId}/leaderboard`, { token });
   check('the leaderboard ranks by balance', freshBoard.data.ranked_by === 'balance');
+  // A stake leaves the balance the moment it is placed, so publishing a
+  // spendable balance would tell the pool how much a rival has committed
+  // before their game kicks off. Standings carry the settled figure instead,
+  // and drop at_risk rather than merely hiding it in the UI.
+  check('standings do not carry at risk',
+    freshBoard.data.standings.every((s) => !('at_risk' in s)),
+    JSON.stringify(Object.keys(freshBoard.data.standings[0] ?? {})));
   check('every member is ranked', freshBoard.data.standings.length >= 1,
     JSON.stringify(freshBoard.data.standings?.length));
   check('an untouched pool sits on the opening balance',
