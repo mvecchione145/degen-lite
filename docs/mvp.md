@@ -175,8 +175,16 @@ in your head, one slate a week, and a no-reuse rule that means something across
 and a pool playing both leagues would have two slates a week to take a single
 pick from.
 
-**Busting** is a wrong pick. Elimination and rebuys both apply; a weekly top-up
-does not, since there is no balance to top up.
+**Busting** is a wrong pick *or no pick at all*. Not picking has to count, or
+sitting a week out would be strictly safer than playing it. Elimination and
+rebuys both apply; a weekly top-up does not, since there is no balance to top
+up.
+
+Standing is **derived** rather than recorded — `alive ⟺ rebuys_used >= losses` —
+and recomputed on every settlement pass. That is what makes a rebuy stick: an
+elimination written once would be undone by the rebuy and then re-applied a
+minute later by the same losing pick. A week counts once all its games have
+finished, and only for members who joined before its last kickoff.
 
 **A rebuy is granted by the commissioner**, not taken by the member. In a wager
 pool a rebuy is self-serve because the ledger settles it — you are bust, you

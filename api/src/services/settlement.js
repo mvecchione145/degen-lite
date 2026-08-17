@@ -158,22 +158,69 @@ async function settlePicks(client) {
      SELECT pool_id, COUNT(*)::INT AS n FROM settled GROUP BY pool_id`,
   );
 
+  // Survivor standing is derived, not recorded: a member is out when their
+  // losses outnumber the rebuys they have been granted.
+  //
+  //     alive  <=>  rebuys_used >= losses
+  //
+  // Deriving it is what makes this safe to re-run every minute. An elimination
+  // written once and left alone would be undone by a rebuy and then re-applied
+  // on the next pass by the very pick the commissioner forgave; a rebuy that
+  // only cleared a flag would be wiped the same way. Here the rebuy increments
+  // a counter, this recomputes, and the two cannot disagree.
+  //
+  // A loss is either a wrong pick or no pick at all. Not picking has to count,
+  // or sitting a week out would be strictly safer than playing it and the
+  // format would be optional.
+  //
+  // Only weeks that have finished count, and only those the member could have
+  // played: joined before the week's *last* kickoff, so they had at least one
+  // game still to pick from. The last rather than the first, because somebody
+  // joining on Sunday after a Thursday game can still take a Sunday team — that
+  // week is theirs to answer for. Nobody is eliminated for weeks that ran before
+  // they arrived, or before the pool existed.
   const { rows: eliminated } = await client.query(
-    `UPDATE pool_members pm
-        SET is_eliminated = TRUE,
-            eliminated_week = sub.week
-       FROM (
-         SELECT p.pool_id, p.user_id, MIN(g.week)::INT AS week
-           FROM picks p
-           JOIN games g ON g.id = p.game_id
-           JOIN pools po ON po.id = p.pool_id
-          WHERE po.pool_type = 'SURVIVOR' AND p.is_correct = FALSE
-          GROUP BY p.pool_id, p.user_id
-       ) sub
-      WHERE pm.pool_id = sub.pool_id
-        AND pm.user_id = sub.user_id
-        AND pm.is_eliminated = FALSE
-        AND pm.withdrawn_at IS NULL
+    `WITH concluded AS (
+        SELECT po.id AS pool_id, g.week, MAX(g.kickoff_time) AS last_kickoff
+          FROM pools po
+          JOIN games g ON g.league = po.leagues[1] AND g.season = po.season
+         WHERE po.pool_type = 'SURVIVOR'
+         GROUP BY po.id, g.week
+        HAVING BOOL_AND(g.status IN ('FINAL', 'VOID'))
+     ), losses AS (
+        SELECT m.pool_id, m.user_id, c.week,
+               ROW_NUMBER() OVER (PARTITION BY m.pool_id, m.user_id
+                                  ORDER BY c.week) AS nth
+          FROM pool_members m
+          JOIN pools po ON po.id = m.pool_id AND po.pool_type = 'SURVIVOR'
+          JOIN concluded c ON c.pool_id = m.pool_id
+         WHERE m.withdrawn_at IS NULL
+           AND m.joined_at < c.last_kickoff
+           AND NOT EXISTS (
+             SELECT 1 FROM picks p
+               JOIN games g ON g.id = p.game_id
+              WHERE p.pool_id = m.pool_id AND p.user_id = m.user_id
+                AND g.league = po.leagues[1] AND g.season = po.season
+                AND g.week = c.week
+                AND p.is_correct IS NOT FALSE
+           )
+     ), verdict AS (
+        SELECT m.pool_id, m.user_id,
+               (SELECT MIN(l.week) FROM losses l
+                 WHERE l.pool_id = m.pool_id AND l.user_id = m.user_id
+                   AND l.nth > m.rebuys_used) AS out_week
+          FROM pool_members m
+          JOIN pools po ON po.id = m.pool_id AND po.pool_type = 'SURVIVOR'
+         WHERE m.withdrawn_at IS NULL
+     )
+     UPDATE pool_members pm
+        SET is_eliminated = (v.out_week IS NOT NULL),
+            eliminated_week = v.out_week
+       FROM verdict v
+      WHERE pm.pool_id = v.pool_id
+        AND pm.user_id = v.user_id
+        AND (pm.is_eliminated <> (v.out_week IS NOT NULL)
+             OR pm.eliminated_week IS DISTINCT FROM v.out_week)
      RETURNING pm.pool_id`,
   );
 

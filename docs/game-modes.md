@@ -132,8 +132,22 @@ reused for the rest of the season, and an incorrect pick eliminates the member.
 week, and a no-reuse rule that bites across 18 weeks. Never reusing one of
 college's 230-odd teams would be no constraint at all.
 
-**Busting** is a wrong pick. Elimination and rebuys both apply; a weekly top-up
-does not, since there is no balance to top up. A rebuy is **granted by the
+**Busting** is a wrong pick *or no pick at all*. Not picking has to count, or
+sitting a week out would be strictly safer than playing it and the format would
+be optional. A week counts once every game in it has finished, and only for
+members who joined before its last kickoff — so nobody is eliminated for weeks
+that ran before they arrived, or before the pool existed.
+
+Elimination and rebuys both apply; a weekly top-up does not, since there is no
+balance to top up.
+
+Standing is **derived**, not recorded:
+
+    alive  ⟺  rebuys_used >= losses
+
+Settlement recomputes it every minute, which is what lets a rebuy stick. An
+elimination written once and left alone would be undone by a rebuy and then
+re-applied on the next pass by the very pick the commissioner forgave. A rebuy is **granted by the
 commissioner** rather than taken by the member — in a wager pool the ledger
 prices a rebuy and it shows in total credited, but survival has no such price,
 so pressing a button to undo your own elimination would just be taking the loss

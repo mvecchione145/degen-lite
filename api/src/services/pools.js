@@ -95,6 +95,9 @@ export async function joinPoolByCode(userId, inviteCode) {
 
     // Only a first join opens a balance, so rejoining stays idempotent and
     // cannot be used to mint another opening credit.
+    //
+    // Survivor needs nothing here: a member is only answerable for weeks that
+    // started after they joined, which settlement reads off `joined_at`.
     if (joined.length > 0) await creditOpening(client, pool, userId);
 
     return pool;
@@ -331,11 +334,15 @@ export async function rebuyMember({ poolId, actorId, targetUserId, reason }) {
       );
     }
 
+    // Granting a rebuy is only a counter. Standing is derived from it —
+    // alive while rebuys cover losses — so settlement recomputes the flags on
+    // its next pass and the two cannot drift apart. Clearing them here as well
+    // just means the member does not have to wait a minute to see it.
     await client.query(
       `UPDATE pool_members
-          SET is_eliminated = FALSE,
-              eliminated_week = NULL,
-              rebuys_used = rebuys_used + 1
+          SET rebuys_used = rebuys_used + 1,
+              is_eliminated = FALSE,
+              eliminated_week = NULL
         WHERE pool_id = $1 AND user_id = $2`,
       [poolId, targetUserId],
     );

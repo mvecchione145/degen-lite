@@ -87,6 +87,11 @@ BEGIN;
 ALTER TABLE pool_members
   ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMP WITH TIME ZONE;
 
+-- Briefly carried a survivor `active_from_week`. Standing is derived from
+-- losses against rebuys instead, which needs no stored floor, so drop it rather
+-- than leave a column nothing reads.
+ALTER TABLE pool_members DROP COLUMN IF EXISTS active_from_week;
+
 CREATE TABLE IF NOT EXISTS pool_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
