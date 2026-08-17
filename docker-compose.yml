@@ -72,6 +72,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       LEADERBOARD_TTL_SECONDS: ${LEADERBOARD_TTL_SECONDS:-30}
       DEV_TOOLS: ${DEV_TOOLS:-true}
+      # POST /api/admin/ingest runs the same ingester the worker does, in this
+      # process. Without these it would walk the real ESPN while the worker
+      # walked the mock, so a compressed season would be quietly overwritten by
+      # the real schedule the moment anyone pressed the button.
+      INGEST_SEASON: ${INGEST_SEASON:-}
+      ESPN_BASE: ${ESPN_BASE:-}
       LEGACY_POOL_MODES: ${LEGACY_POOL_MODES:-false}
       INGEST_LEAGUES: ${INGEST_LEAGUES:-NFL,NCAAF}
       SHARP_API_KEY: ${SHARP_API_KEY:-}

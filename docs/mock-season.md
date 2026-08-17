@@ -85,6 +85,42 @@ covered — every spread bet on a favourite lost, and settlement looked broken
 when it was working perfectly. Lines are always half-points, so **nothing ever
 pushes**; to exercise the push path, set a whole-number line by hand.
 
+## The automated run
+
+`scripts/season-test.sh` plays a whole season unattended and checks it:
+
+```bash
+./scripts/season-test.sh                 # 18 NFL weeks, about 7 minutes
+./scripts/season-test.sh --weeks 4       # a shorter pass
+./scripts/season-test.sh --keep          # leave the stack up to poke at
+```
+
+It stands up its own compose project on its own ports, so it neither sees nor
+disturbs the stack you are working in, and the database is created and
+destroyed with the run. Four pools carry the season — a wager pool small enough
+to bust somebody, a `TOPUP` pool for the stipends, and both survivor bust
+policies — with a cast that bets chalk, dogs, overs and unders, plus one member
+who never picks at all.
+
+The invariants are checked after *every* settlement rather than only at the
+end, because a balance that stops reconciling in week 6 is far easier to
+understand than one that is merely wrong in week 18:
+
+- every balance reconciles to its ledger, and none goes below zero
+- no wager is left pending on a finished game
+- a settled wager's `net` matches its grade, and its ledger entries sum to it
+- survivor standing equals losses measured against rebuys
+- no member draws two stipends for one week
+
+Then, at the final whistle: every game final, every wager settled, every pick
+graded, both markets exercised, wagers graded both ways, the survivor field
+narrowed, a member who never picked eliminated, and a leaderboard that still
+agrees with the ledger.
+
+Nothing in it fabricates a result — `/admin/simulate` is never called. The
+season comes from this mock through the real ingester, and all the harness does
+is what a member does: place a bet, make a pick.
+
 ## What a run proves
 
 A complete run exercises the whole chain, and the arithmetic can be checked
