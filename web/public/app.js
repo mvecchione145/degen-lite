@@ -1062,6 +1062,16 @@ function accountTitle(row) {
   return `title="${esc(row.account_email)}"`;
 }
 
+// A member's avatar and name, in one place because the two leaderboards drifted
+// apart: the survivor one was rendering the name alone while the wager one
+// showed the emoji beside it, and both read from the same payload. Badges stay
+// with the caller — "Bust" and "Out W6" belong to different tables — but who
+// the row is about should not be rewritten per table.
+function memberName(row) {
+  return `${row.avatar_emoji ? `<span class="avatar">${esc(row.avatar_emoji)}</span>` : ''}
+    <span class="named" ${accountTitle(row)}>${esc(row.username)}</span>`;
+}
+
 function wagerLeaderboard(leaderboard, pool, currentUserId) {
   const showCredited = pool.bust_policy !== 'ELIMINATE';
   return `
@@ -1082,8 +1092,7 @@ function wagerLeaderboard(leaderboard, pool, currentUserId) {
             <tr class="${row.user_id === currentUserId ? 'me' : ''}">
               <td class="num">${row.rank}</td>
               <td class="${row.is_eliminated ? 'eliminated' : ''}">
-                ${row.avatar_emoji ? `<span class="avatar">${esc(row.avatar_emoji)}</span>` : ''}
-                <span class="named" ${accountTitle(row)}>${esc(row.username)}</span>
+                ${memberName(row)}
                 ${row.is_eliminated ? '<span class="badge red">Bust</span>' : ''}
                 ${row.rebuys_used > 0 ? `<span class="badge grey">${row.rebuys_used}× rebuy</span>` : ''}
               </td>
@@ -1847,7 +1856,7 @@ function pickLeaderboard(leaderboard, poolType, currentUserId) {
           <tr class="${row.user_id === currentUserId ? 'me' : ''}">
             <td class="num">${row.rank}</td>
             <td class="${row.is_eliminated ? 'eliminated' : ''}">
-              <span class="named" ${accountTitle(row)}>${esc(row.username)}</span>
+              ${memberName(row)}
               ${row.is_eliminated
     ? `<span class="badge red">Out W${row.eliminated_week ?? '?'}</span>` : ''}
             </td>
