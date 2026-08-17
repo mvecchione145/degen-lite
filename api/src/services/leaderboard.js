@@ -47,16 +47,29 @@ async function wagerStandings(pool) {
     [pool.id],
   );
 
+  // The standings show a settled balance: what a member would hold if every
+  // wager still running were voided. That is the ledger balance with the
+  // pending stakes added back.
+  //
+  // Not cosmetic. A stake leaves the balance the moment it is placed, so a
+  // spendable balance is the settled figure minus whatever is at risk — and
+  // publishing it tells everyone else exactly how much a rival has committed
+  // before their game kicks off. The reveal rule hides which side they took;
+  // this is the other half of the same secret.
+  //
+  // `at_risk` is dropped from the payload rather than merely hidden in the UI,
+  // since anyone can read the API. A member's own exposure is still their own
+  // to see, and comes from /balance.
   const standings = rows.map((row) => {
-    const balance = Number(row.balance);
     const atRisk = Number(row.at_risk);
     const credited = Number(row.total_credited);
+    const settled = Number((Number(row.balance) + atRisk).toFixed(2));
+    const { at_risk: unused, ...rest } = row;
     return {
-      ...row,
-      balance,
-      at_risk: atRisk,
+      ...rest,
+      balance: settled,
       total_credited: credited,
-      net_profit: Number((balance + atRisk - credited).toFixed(2)),
+      net_profit: Number((settled - credited).toFixed(2)),
     };
   });
 
