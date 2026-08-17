@@ -146,6 +146,21 @@ authenticated endpoint added to the file inherited the same trap.
 counts failures only, so typing your own password correctly all day never
 touches it.
 
+Both limiters **skip entirely when dev tools are on**. A development stack has
+nobody to brute force, while everything that gets run against one looks exactly
+like an attack: `scripts/smoke-test.mjs` registers a cast of accounts in
+seconds, `scripts/season-test.sh` drives a whole season, and reloading the login
+screen enough times while working on it exhausts a 20-attempt budget and locks
+the developer out of their own stack for fifteen minutes.
+
+This deliberately rides on `config.devTools` rather than a switch of its own,
+because that gate is already the one that cannot be turned on in production —
+`resolveDevTools` returns false whenever `NODE_ENV=production`, whatever the
+environment asks for. A deployment therefore always throttles, and there is no
+new variable anyone can set on a server to disable it, which is the mistake a
+separate `RATE_LIMIT=false` would invite. The API says so at boot:
+`dev tools enabled at /api/admin — auth rate limits are OFF`.
+
 ### What the standings may show
 
 Standings carry a **settled** balance — what a member would hold if every wager
@@ -576,12 +591,16 @@ This runs locally. Before it runs anywhere else:
   and `/admin/abandon` can rewrite results and void wagers.
 - **Token handling** — JWTs are stored in `localStorage` (XSS-readable) with no
   refresh or revocation path.
-- **No rate limiting** — `/auth/login` and `/auth/register` are unthrottled.
+- **Rate limiting is auth-only** — `/auth/login` and `/auth/register` are
+  throttled per IP and per account; nothing else is. A production deployment
+  always has them (they are disabled only where `DEV_TOOLS` applies, which
+  `NODE_ENV=production` forces off), but there is no limit on the API at large.
 - **No migration tooling** — `db/init/*.sql` runs only against an empty volume, so
   a schema change means `docker compose down -v`. This is the first gap to close.
 - **No TLS** — nginx serves plain HTTP; termination is assumed upstream.
-- **Testing** — `scripts/smoke-test.mjs` covers the API end to end, but there are
-  no unit tests and the web client has no automated coverage.
+- **Testing** — `scripts/smoke-test.mjs` covers the API end to end and
+  `scripts/season-test.sh` plays a full season against the mock feed, but the
+  web client has no automated coverage beyond `api/test/web-render.test.js`.
 - **Operations** — no structured logging, metrics, tracing, or backups. The
   ledger is the system of record for balances and has no backup story.
 
