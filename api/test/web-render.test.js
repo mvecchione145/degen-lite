@@ -307,3 +307,92 @@ test('esc() covers the five characters that matter', () => {
   assert.equal(esc(null), '');
   assert.equal(esc(undefined), '');
 });
+
+/* ------------------------------------------------------------ leaderboards */
+
+// Renders a builder that takes more than one argument and leans on sibling
+// functions rather than only the stand-in helpers above.
+function renderWith(name, deps, ...args) {
+  const sources = deps.map(extractFunction).join('\n');
+  const fn = new Function(`${HELPERS}${sources}
+    ${extractFunction(name)}
+    return ${name}(${args.map((a) => JSON.stringify(a)).join(', ')});`);
+  return fn();
+}
+
+const standing = (over) => ({
+  user_id: 'u1',
+  rank: 1,
+  username: 'Vecc',
+  account_email: 'v@ex.com',
+  avatar_emoji: '🦈',
+  is_eliminated: false,
+  eliminated_week: null,
+  rebuys_used: 0,
+  balance: 20000,
+  net_profit: 0,
+  total_credited: 20000,
+  points: 3,
+  wins: 3,
+  losses: 0,
+  pushes: 0,
+  ...over,
+});
+
+const leaderboardPayload = (over) => ({
+  standings: [standing(over)],
+  computed_at: '2026-09-11T00:00:00.000Z',
+  cached: false,
+});
+
+// The bug: the survivor leaderboard rendered the name alone while the wager
+// one showed the avatar beside it, from the same payload and the same column.
+// Both are pinned, because fixing one and not the other is exactly how they
+// came apart in the first place.
+test('both leaderboards show a member\'s avatar', () => {
+  const wager = renderWith(
+    'wagerLeaderboard', ['accountTitle', 'memberName'],
+    leaderboardPayload(), { bust_policy: 'ELIMINATE' }, 'u1',
+  );
+  assert.match(wager, /🦈/, 'the wager leaderboard dropped the avatar');
+
+  const pick = renderWith(
+    'pickLeaderboard', ['accountTitle', 'memberName'],
+    leaderboardPayload(), 'SURVIVOR', 'u1',
+  );
+  assert.match(pick, /🦈/, 'the survivor leaderboard dropped the avatar');
+});
+
+test('a member without an avatar renders no empty span', () => {
+  for (const [name, second] of [['wagerLeaderboard', { bust_policy: 'ELIMINATE' }],
+    ['pickLeaderboard', 'SURVIVOR']]) {
+    const html = renderWith(
+      name, ['accountTitle', 'memberName'],
+      leaderboardPayload({ avatar_emoji: null }), second, 'u1',
+    );
+    assert.doesNotMatch(html, /class="avatar"/, `${name} rendered an empty avatar`);
+    assert.match(html, /Vecc/);
+  }
+});
+
+test('the survivor leaderboard still marks who is out, and when', () => {
+  const html = renderWith(
+    'pickLeaderboard', ['accountTitle', 'memberName'],
+    leaderboardPayload({ is_eliminated: true, eliminated_week: 6 }), 'SURVIVOR', 'u1',
+  );
+  assert.match(html, /Out W6/);
+  assert.match(html, /🦈/, 'an eliminated member keeps their avatar');
+});
+
+test('the email stays on the hover title in both', () => {
+  const wager = renderWith(
+    'wagerLeaderboard', ['accountTitle', 'memberName'],
+    leaderboardPayload(), { bust_policy: 'ELIMINATE' }, 'u1',
+  );
+  const pick = renderWith(
+    'pickLeaderboard', ['accountTitle', 'memberName'],
+    leaderboardPayload(), 'SURVIVOR', 'u1',
+  );
+  assert.match(wager, /title="v@ex\.com"/);
+  assert.match(pick, /title="v@ex\.com"/);
+});

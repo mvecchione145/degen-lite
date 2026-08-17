@@ -96,25 +96,52 @@ async function main() {
   // free text: it renders into other members' rows, so anything that is not an
   // emoji would be writing arbitrary content somewhere that is not yours.
   check('an emoji avatar is accepted',
-    (await call('/auth/avatar', {
+    (await call('/auth/profile', {
       method: 'POST', token, body: { avatar_emoji: '🦈' },
     })).data.user?.avatar_emoji === '🦈');
   check('a multi-code-point emoji is accepted',
-    (await call('/auth/avatar', {
+    (await call('/auth/profile', {
       method: 'POST', token, body: { avatar_emoji: '👍🏽' },
     })).data.user?.avatar_emoji === '👍🏽');
   check('plain text is refused as an avatar',
-    (await call('/auth/avatar', {
+    (await call('/auth/profile', {
       method: 'POST', token, body: { avatar_emoji: 'admin' },
     })).status === 400);
   check('markup is refused as an avatar',
-    (await call('/auth/avatar', {
+    (await call('/auth/profile', {
       method: 'POST', token, body: { avatar_emoji: '<img src=x onerror=alert(1)>' },
     })).status === 400);
   check('null clears the avatar',
-    (await call('/auth/avatar', {
+    (await call('/auth/profile', {
       method: 'POST', token, body: { avatar_emoji: null },
     })).data.user?.avatar_emoji === null);
+
+  // A display name is what the pool sees; the username stays the login handle.
+  check('a display name is accepted',
+    (await call('/auth/profile', {
+      method: 'POST', token, body: { display_name: 'The Commish' },
+    })).data.user?.display_name === 'The Commish');
+  check('the username is not touched by it',
+    (await call('/auth/me', { token })).data.user?.username === 'admin');
+  check('a display name over 50 characters is refused',
+    (await call('/auth/profile', {
+      method: 'POST', token, body: { display_name: 'x'.repeat(51) },
+    })).status === 400);
+  // Names need not be unique, but taking somebody else's *username* is
+  // impersonation — the commissioner log and the standings both name people.
+  check("another account's username is refused as a display name",
+    (await call('/auth/profile', {
+      method: 'POST', token: memberToken, body: { display_name: 'admin' },
+    })).status === 409);
+  // One endpoint, two fields: an absent field means "leave alone".
+  check('setting only the emoji leaves the display name',
+    (await call('/auth/profile', {
+      method: 'POST', token, body: { avatar_emoji: '🦈' },
+    })).data.user?.display_name === 'The Commish');
+  check('null clears the display name',
+    (await call('/auth/profile', {
+      method: 'POST', token, body: { display_name: null },
+    })).data.user?.display_name === null);
 
   // /auth/me runs on every page load. It shared the brute-force budget with
   // /login until that limiter was scoped to the credential routes, which locked
@@ -171,6 +198,38 @@ async function main() {
     (await call('/pools', {
       method: 'POST', token, body: { name: `Legacy ${suffix}`, pool_type: 'PICKEM' },
     })).status === 400);
+
+  // Survivor is offered alongside Spread Sharks, and is NFL only: 32 teams and
+  // one slate a week are what make a no-reuse rule bite.
+  const survivor = await call('/pools', {
+    method: 'POST',
+    token,
+    body: { name: `Survivor ${suffix}`, pool_type: 'SURVIVOR', bust_policy: 'REBUY', rebuy_limit: 1 },
+  });
+  check('a survivor pool is created without the legacy flag', survivor.status === 201,
+    JSON.stringify(survivor.data).slice(0, 140));
+  check('it carries its bust policy', survivor.data.pool?.bust_policy === 'REBUY'
+    && survivor.data.pool?.rebuy_limit === 1);
+  check('survivor is NFL only',
+    (await call('/pools', {
+      method: 'POST', token, body: { name: `SurvC ${suffix}`, pool_type: 'SURVIVOR', leagues: ['NCAAF'] },
+    })).status === 400);
+  check('a survivor pool cannot run a weekly top-up',
+    (await call('/pools', {
+      method: 'POST',
+      token,
+      body: { name: `SurvT ${suffix}`, pool_type: 'SURVIVOR', bust_policy: 'TOPUP', stipend_amount: 100 },
+    })).status === 400);
+  // The pick board counts finished games only, so a live week shows nothing —
+  // a running total would tell whoever has not picked what the rest did.
+  const freshBoardWeek = await call(
+    `/pools/${survivor.data.pool.id}/pick-board?week=${currentWeek}`, { token },
+  );
+  check('the pick board is empty while the week is live',
+    freshBoardWeek.status === 200 && freshBoardWeek.data.teams.length === 0,
+    JSON.stringify(freshBoardWeek.data).slice(0, 120));
+  check('a wager pool has no pick board',
+    (await call(`/pools/${poolId}/pick-board?week=${currentWeek}`, { token })).status === 400);
   check('a top-up pool without a stipend is refused',
     (await call('/pools', {
       method: 'POST', token, body: { name: `T ${suffix}`, bust_policy: 'TOPUP' },
@@ -465,6 +524,26 @@ async function main() {
   const quietId = quietPool.data.pool.id;
   const freshBoard = await call(`/pools/${quietId}/leaderboard`, { token });
   check('the leaderboard ranks by balance', freshBoard.data.ranked_by === 'balance');
+
+  // Standings name people by their display name when they have set one, so
+  // this is where the column actually has to land.
+  await call('/auth/profile', { method: 'POST', token, body: { display_name: 'The Commish' } });
+  const named = await call(`/pools/${quietId}/leaderboard`, { token });
+  check('the standings show a display name over the username',
+    named.data.standings.some((s) => s.username === 'The Commish'),
+    JSON.stringify(named.data.standings.map((s) => s.username)));
+  await call('/auth/profile', { method: 'POST', token, body: { display_name: null } });
+  const unnamed = await call(`/pools/${quietId}/leaderboard`, { token });
+  check('and fall back to the username once it is cleared',
+    unnamed.data.standings.some((s) => s.username === 'admin'),
+    JSON.stringify(unnamed.data.standings.map((s) => s.username)));
+
+  // A display name need not be unique, so a standings row carries the account's
+  // email for the tooltip that tells two members of the same name apart.
+  check('a standings row carries the account email',
+    unnamed.data.standings.every((s) => typeof s.account_email === 'string'
+      && s.account_email.includes('@')),
+    JSON.stringify(unnamed.data.standings.map((s) => s.account_email)));
   // A stake leaves the balance the moment it is placed, so publishing a
   // spendable balance would tell the pool how much a rival has committed
   // before their game kicks off. Standings carry the settled figure instead,

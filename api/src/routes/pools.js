@@ -11,12 +11,13 @@ import {
   listMembers,
   listPoolEvents,
   listPoolsForUser,
+  rebuyMember,
   reinstateMember,
   requireMembership,
   withdrawMember,
 } from '../services/pools.js';
 import { getLeaderboard } from '../services/leaderboard.js';
-import { getWeekView, submitPicks } from '../services/picks.js';
+import { getPickBoard, getWeekView, submitPicks } from '../services/picks.js';
 import {
   assertPoolLeague, getBoard, listBets, listPendingForCommissioner, listPoolBets,
   placeBet, rebuy, voidBet,
@@ -42,11 +43,19 @@ const twoDecimals = (v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6;
 const money = (min) => z.number().min(min).max(1_000_000_000)
   .refine(twoDecimals, 'At most two decimal places');
 
-const LEGACY_TYPES = ['PICKEM', 'CONFIDENCE', 'SURVIVOR'];
+// Offered when creating a pool. Survivor sits here rather than with the legacy
+// modes: it is a format people actually ask for, and unlike Pick'em and
+// Confidence it needs no scoring rules of its own — the pick either survives
+// the week or it does not.
+const OFFERED_TYPES = ['SPREAD_SHARKS', 'SURVIVOR'];
+
+// Still in the codebase and still playable, but not offered unless
+// LEGACY_POOL_MODES says so. Existing pools of these types keep working.
+const LEGACY_TYPES = ['PICKEM', 'CONFIDENCE'];
 
 const createSchema = z.object({
   name: z.string().trim().min(3).max(100),
-  pool_type: z.enum(['SPREAD_SHARKS', ...LEGACY_TYPES]).optional().default('SPREAD_SHARKS'),
+  pool_type: z.enum([...OFFERED_TYPES, ...LEGACY_TYPES]).optional().default('SPREAD_SHARKS'),
   use_spreads: z.boolean().optional().default(false),
   // The leagues a pool plays. Fixed for its life: every board, week list and
   // stipend is scoped by them. Boards never merge two leagues' weeks — the
@@ -162,6 +171,22 @@ router.post('/', asyncHandler(async (req, res) => {
 
   if (body.pool_type === 'SURVIVOR' && body.use_spreads) {
     throw badRequest('Survivor pools are always straight up');
+  }
+  // Survivor is NFL only. The format leans on a small, stable league: 32 teams
+  // you can hold in your head, one slate a week, and a no-reuse rule that means
+  // something across 18 weeks. College has 230-odd teams, so never reusing one
+  // costs nothing, and a pool playing both leagues would have two slates a week
+  // to pick a single team from.
+  if (body.pool_type === 'SURVIVOR'
+      && (body.leagues.length > 1 || body.leagues[0] !== 'NFL')) {
+    throw badRequest('Survivor pools are NFL only');
+  }
+  // A weekly top-up hands out balance, which a survivor pool has none of.
+  // Eliminate and rebuy both mean something there; top-up does not.
+  if (body.pool_type === 'SURVIVOR' && body.bust_policy === 'TOPUP') {
+    throw badRequest(
+      'A survivor pool has no balance to top up. Use elimination or rebuys.',
+    );
   }
   if (body.bust_policy === 'TOPUP' && body.stipend_amount == null) {
     throw badRequest('A weekly top-up pool needs a stipend amount');
@@ -355,6 +380,18 @@ router.post('/:poolId/members/:userId/reinstate', asyncHandler(async (req, res) 
   }));
 }));
 
+// Buys an eliminated member back into a survivor pool. Commissioner-only by
+// design — undoing your own elimination would just be taking the loss back.
+router.post('/:poolId/members/:userId/rebuy', asyncHandler(async (req, res) => {
+  const { reason } = commissionerActionSchema.parse(req.body ?? {});
+  res.json(await rebuyMember({
+    poolId: req.params.poolId,
+    actorId: req.user.id,
+    targetUserId: z.string().uuid().parse(req.params.userId),
+    reason,
+  }));
+}));
+
 // The live wagers a commissioner may act on. Sides stay hidden until kickoff
 // exactly as they do for every other member.
 router.get('/:poolId/pending', asyncHandler(async (req, res) => {
@@ -387,6 +424,17 @@ router.get('/:poolId/events', asyncHandler(async (req, res) => {
 router.get('/:poolId/week/:week', asyncHandler(async (req, res) => {
   const week = weekParam.parse(req.params.week);
   res.json(await getWeekView({
+    poolId: req.params.poolId,
+    userId: req.user.id,
+    week,
+  }));
+}));
+
+// How the pool spread across the week's teams. Counts only — who took what
+// stays behind the same reveal rule the board uses.
+router.get('/:poolId/pick-board', asyncHandler(async (req, res) => {
+  const week = weekParam.parse(req.query.week);
+  res.json(await getPickBoard({
     poolId: req.params.poolId,
     userId: req.user.id,
     week,

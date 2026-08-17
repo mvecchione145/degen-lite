@@ -26,6 +26,12 @@ CREATE TABLE users (
     -- per pool: it is who you are, not how you play in one league. Wide enough
     -- for a ZWJ sequence or a flag, which are several code points each; NULL
     -- means the member has not picked one and the UI shows nothing.
+    -- What other members see. NULL means "go by the username", which is what
+    -- every account starts as. Not unique: two people may both be Mike, and
+    -- forcing a suffix on the second one would be worse than the ambiguity.
+    -- Taking a name that is already somebody's *username* is refused, though —
+    -- that is impersonation, not a coincidence.
+    display_name VARCHAR(50),
     avatar_emoji VARCHAR(24),
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -90,6 +96,15 @@ CREATE TABLE pool_members (
     is_eliminated BOOLEAN NOT NULL DEFAULT FALSE,
     eliminated_week INT,
     rebuys_used INT NOT NULL DEFAULT 0,
+    -- Survivor: the first week this member can be eliminated for, recorded when
+    -- they join. NULL means from the start of the season.
+    --
+    -- A week number rather than a comparison against `joined_at`, because
+    -- kickoff times move: /admin/simulate rewrites them into the past to make a
+    -- week read as played, and a rescheduled fixture shifts them for real. Both
+    -- would silently change who was answerable for a week that has already been
+    -- settled. The week a member arrived does not move.
+    active_from_week INT,
     withdrawn_at TIMESTAMP WITH TIME ZONE,
     PRIMARY KEY (pool_id, user_id)
 );
@@ -204,7 +219,8 @@ CREATE TABLE pool_events (
     pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
     actor_id UUID NOT NULL REFERENCES users(id),
     kind VARCHAR(30) NOT NULL
-        CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED', 'BET_VOIDED')),
+        CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED',
+                        'MEMBER_REBOUGHT', 'BET_VOIDED')),
     target_user_id UUID REFERENCES users(id),
     bet_id UUID REFERENCES bets(id),
     reason TEXT,

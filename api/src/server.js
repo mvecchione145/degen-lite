@@ -11,7 +11,11 @@ async function main() {
 
   const server = createApp().listen(config.port, () => {
     console.log(`[api] listening on :${config.port} (${config.env})`);
-    if (config.devTools) console.log('[api] dev tools enabled at /api/admin');
+    // Said out loud, because it is the one gate that relaxes a defence: the
+    // same flag that mounts /api/admin also turns the auth rate limits off.
+    if (config.devTools) {
+      console.log('[api] dev tools enabled at /api/admin — auth rate limits are OFF');
+    }
   });
 
   const shutdown = async (signal) => {

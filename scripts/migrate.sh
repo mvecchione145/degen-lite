@@ -42,6 +42,11 @@ require_db
 # so a missing item is obvious at a glance.
 report() {
   psql_run -tAc "
+    SELECT 'pool_members.active_from   : ' || CASE WHEN EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'pool_members' AND column_name = 'active_from_week'
+    ) THEN 'present' ELSE 'MISSING' END
+    UNION ALL
     SELECT 'pool_members.withdrawn_at : ' || CASE WHEN EXISTS (
       SELECT 1 FROM information_schema.columns
        WHERE table_name = 'pool_members' AND column_name = 'withdrawn_at'
@@ -51,15 +56,20 @@ report() {
       SELECT 1 FROM information_schema.tables WHERE table_name = 'pool_events'
     ) THEN 'present' ELSE 'MISSING' END
     UNION ALL
-    SELECT 'pool_events reinstate kind: ' || CASE WHEN EXISTS (
+    SELECT 'pool_events rebuy kind    : ' || CASE WHEN EXISTS (
       SELECT 1 FROM pg_constraint
        WHERE conname = 'pool_events_kind_check'
-         AND pg_get_constraintdef(oid) LIKE '%MEMBER_REINSTATED%'
+         AND pg_get_constraintdef(oid) LIKE '%MEMBER_REBOUGHT%'
     ) THEN 'present' ELSE 'MISSING' END
     UNION ALL
     SELECT 'users.avatar_emoji        : ' || CASE WHEN EXISTS (
       SELECT 1 FROM information_schema.columns
        WHERE table_name = 'users' AND column_name = 'avatar_emoji'
+    ) THEN 'present' ELSE 'MISSING' END
+    UNION ALL
+    SELECT 'users.display_name        : ' || CASE WHEN EXISTS (
+      SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'users' AND column_name = 'display_name'
     ) THEN 'present' ELSE 'MISSING' END
     UNION ALL
     SELECT 'games team abbreviations  : ' || CASE WHEN EXISTS (
@@ -82,6 +92,16 @@ BEGIN;
 ALTER TABLE pool_members
   ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMP WITH TIME ZONE;
 
+-- Survivor: the first week a member can be eliminated for. A week number rather
+-- than a comparison against joined_at, because kickoff times move — simulating
+-- a week rewrites them into the past, which would silently excuse everyone who
+-- was already in the pool.
+--
+-- Existing rows are backfilled to week 1: every pool that predates this was
+-- created before its season began, so its members are answerable throughout.
+ALTER TABLE pool_members ADD COLUMN IF NOT EXISTS active_from_week INT;
+UPDATE pool_members SET active_from_week = 1 WHERE active_from_week IS NULL;
+
 CREATE TABLE IF NOT EXISTS pool_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
@@ -102,11 +122,13 @@ CREATE INDEX IF NOT EXISTS pool_events_pool_idx
 -- no in-place form.
 ALTER TABLE pool_events DROP CONSTRAINT IF EXISTS pool_events_kind_check;
 ALTER TABLE pool_events ADD CONSTRAINT pool_events_kind_check
-    CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED', 'BET_VOIDED'));
+    CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED',
+                        'MEMBER_REBOUGHT', 'BET_VOIDED'));
 
--- One emoji beside the name on leaderboards.
+-- One emoji beside the name on leaderboards, and the name shown beside it.
 ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS avatar_emoji VARCHAR(24);
+  ADD COLUMN IF NOT EXISTS avatar_emoji VARCHAR(24),
+  ADD COLUMN IF NOT EXISTS display_name VARCHAR(50);
 
 -- The feed's own team abbreviations, for the board on a narrow screen. Existing
 -- rows stay NULL until the next ingest refreshes them, and the UI falls back to

@@ -27,10 +27,12 @@ no pools at all, and generates no sports data.
   credited, Redis-cached. Stake at risk is deliberately absent: see below
 - **Bet history** — every wager with the line and price as struck, and running P&L
 - **Reveal** — other members' bets stay hidden until a game kicks off
-- **Emoji avatars** — one emoji per account, shown beside the name on every
-  leaderboard, set from a picker in the header
-- **Legacy modes** — Pick'em, Confidence, and Survivor pools remain fully
-  playable behind a flag
+- **Profile** — a display name and an emoji per account, shown together
+  wherever the pool names a member, edited from the header
+- **Survivor** — one team to win outright each week, no team twice, a wrong
+  pick puts you out. NFL only, with a pick board showing how the pool spread
+  across teams once the games are played
+- **Legacy modes** — Pick'em and Confidence remain fully playable behind a flag
 
 ## Stack
 
@@ -144,6 +146,21 @@ authenticated endpoint added to the file inherited the same trap.
 counts failures only, so typing your own password correctly all day never
 touches it.
 
+Both limiters **skip entirely when dev tools are on**. A development stack has
+nobody to brute force, while everything that gets run against one looks exactly
+like an attack: `scripts/smoke-test.mjs` registers a cast of accounts in
+seconds, `scripts/season-test.sh` drives a whole season, and reloading the login
+screen enough times while working on it exhausts a 20-attempt budget and locks
+the developer out of their own stack for fifteen minutes.
+
+This deliberately rides on `config.devTools` rather than a switch of its own,
+because that gate is already the one that cannot be turned on in production —
+`resolveDevTools` returns false whenever `NODE_ENV=production`, whatever the
+environment asks for. A deployment therefore always throttles, and there is no
+new variable anyone can set on a server to disable it, which is the mistake a
+separate `RATE_LIMIT=false` would invite. The API says so at boot:
+`dev tools enabled at /api/admin — auth rate limits are OFF`.
+
 ### What the standings may show
 
 Standings carry a **settled** balance — what a member would hold if every wager
@@ -159,6 +176,55 @@ standings is what makes the reveal rule worth having.
 `at_risk` is therefore dropped from the leaderboard payload rather than merely
 hidden in the table — anyone can read the API. A member's own exposure is still
 their own to see and comes from `/pools/:id/balance`.
+
+## Survivor
+
+Offered at creation alongside Spread Sharks; Pick'em and Confidence stay behind
+`LEGACY_POOL_MODES`. Survivor needed no scoring rules of its own — the pick
+survives the week or it does not — which is why it sits with the offered formats
+rather than the legacy ones.
+
+**NFL only.** The format leans on a small, stable league: 32 teams you can hold
+in your head, one slate a week, and a no-reuse rule that means something across
+18 weeks. Never reusing one of college's 230-odd teams is no constraint at all,
+and a pool playing both leagues would have two slates a week to take a single
+pick from.
+
+**Busting** is a wrong pick *or no pick at all*. Not picking has to count, or
+sitting a week out would be strictly safer than playing it. Elimination and
+rebuys both apply; a weekly top-up does not, since there is no balance to top
+up.
+
+Standing is **derived** rather than recorded — `alive ⟺ rebuys_used >= losses` —
+and recomputed on every settlement pass. That is what makes a rebuy stick: an
+elimination written once would be undone by the rebuy and then re-applied a
+minute later by the same losing pick. A week counts once all its games have
+finished, and only for members who joined before its last kickoff.
+
+**A rebuy is granted by the commissioner**, not taken by the member. In a wager
+pool a rebuy is self-serve because the ledger settles it — you are bust, you
+take a fresh balance, and the cost shows in total credited. Survival has no such
+price: pressing a button to undo your own elimination is just taking the loss
+back. `POST /pools/:id/members/:userId/rebuy` is commissioner-only, bounded by
+the pool's rebuy limit, and recorded in the commissioner log.
+
+### The pick board
+
+A tab on survivor pools showing how the pool spread across the week's teams,
+most-backed first.
+
+It counts **only games that have concluded**. A live count would hand whoever
+has not picked yet an advantage over the members who have — see the field
+100-deep on a team and you can fade it, which is information the early picker
+paid for by committing first. Kickoff is not a late enough boundary either:
+survivor takes one pick from anywhere on the slate, so a Thursday result still
+informs a Sunday pick. So the board reads as a record of what the pool did, and
+the current week is usually empty.
+
+It is aggregate besides — how many took a team, never who. Individual picks stay
+behind the same reveal rule the pick view uses. In a very small pool an
+aggregate is thin cover, since with two members a count of one plus your own
+pick names the other person; that is inherent to counting.
 
 ## Rules enforced in the application
 
@@ -206,7 +272,7 @@ points requires `Authorization: Bearer <token>`.
 | `POST` | `/auth/register` | `{username, email, password}` → `{token, user}` |
 | `POST` | `/auth/login` | `{login, password}` — `login` is a username or email |
 | `GET` | `/auth/me` | The authenticated user |
-| `POST` | `/auth/avatar` | `{avatar_emoji}` — one emoji, or null to clear it |
+| `POST` | `/auth/profile` | `{display_name?, avatar_emoji?}` — how the pool sees you. An absent field is left alone, null clears it |
 
 ### Pools
 
@@ -229,6 +295,8 @@ points requires `Authorization: Bearer <token>`.
 | `GET` | `/pools/:id/pending` | Commissioner only. Live wagers, with the side withheld until kickoff |
 | `POST` | `/pools/:id/members/:userId/withdraw` | Commissioner only. `{reason?}` |
 | `POST` | `/pools/:id/members/:userId/reinstate` | Commissioner only. `{reason?}`. Undoes a withdrawal |
+| `POST` | `/pools/:id/members/:userId/rebuy` | Commissioner only. `{reason?}`. Buys an eliminated survivor member back in |
+| `GET` | `/pools/:id/pick-board?week=` | Survivor: teams picked and how many took each, finished games only |
 | `POST` | `/pools/:id/bets/:betId/void` | Commissioner only. `{reason?}`. Refunds the stake |
 | `GET` | `/pools/:id/bets?status=` | Bet history with a summary |
 | `GET` | `/pools/:id/balance` | Available, at risk, credited, net, bust state |
@@ -305,6 +373,11 @@ Full list in [`.env.example`](../.env.example).
 The footer shows the commit the web bundle was built from, linking to it on the
 remote. The container has no `.git`, so `web/Dockerfile` takes `GIT_COMMIT` and
 `GIT_REPO_URL` as build arguments and writes them into `build-info.js`.
+
+`scripts/compose.sh rebuild [service]` is the shorthand for `up -d --build`,
+which is what actually picks up a client edit — the flags have to precede the
+service name or compose rebuilds nothing while still reporting the container
+started.
 
 `scripts/lib/build-stamp.sh` resolves both from the working tree, and both
 deploy paths source it — `scripts/compose.sh` on a laptop and
@@ -518,12 +591,16 @@ This runs locally. Before it runs anywhere else:
   and `/admin/abandon` can rewrite results and void wagers.
 - **Token handling** — JWTs are stored in `localStorage` (XSS-readable) with no
   refresh or revocation path.
-- **No rate limiting** — `/auth/login` and `/auth/register` are unthrottled.
+- **Rate limiting is auth-only** — `/auth/login` and `/auth/register` are
+  throttled per IP and per account; nothing else is. A production deployment
+  always has them (they are disabled only where `DEV_TOOLS` applies, which
+  `NODE_ENV=production` forces off), but there is no limit on the API at large.
 - **No migration tooling** — `db/init/*.sql` runs only against an empty volume, so
   a schema change means `docker compose down -v`. This is the first gap to close.
 - **No TLS** — nginx serves plain HTTP; termination is assumed upstream.
-- **Testing** — `scripts/smoke-test.mjs` covers the API end to end, but there are
-  no unit tests and the web client has no automated coverage.
+- **Testing** — `scripts/smoke-test.mjs` covers the API end to end and
+  `scripts/season-test.sh` plays a full season against the mock feed, but the
+  web client has no automated coverage beyond `api/test/web-render.test.js`.
 - **Operations** — no structured logging, metrics, tracing, or backups. The
   ledger is the system of record for balances and has no backup story.
 

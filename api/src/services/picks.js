@@ -55,7 +55,7 @@ export async function getWeekView({ poolId, userId, week }) {
   // Other members' picks are only revealed once a game has kicked off.
   const { rows: revealed } = await query(
     `SELECT p.game_id, p.selected_team, p.confidence_rank, p.is_correct,
-            u.username
+            COALESCE(u.display_name, u.username) AS username
        FROM picks p
        JOIN users u ON u.id = p.user_id
        JOIN games g ON g.id = p.game_id
@@ -237,4 +237,71 @@ export async function submitPicks({ poolId, userId, week, submissions }) {
 
   await cacheDel(leaderboardKey(poolId));
   return saved;
+}
+
+// How the pool spread itself across the week's teams: one row per team picked,
+// most-backed first.
+//
+// Only counts picks on games that have concluded. A live count would hand the
+// members who have not picked yet an advantage over the ones who have — see the
+// field 100-deep on a team and you can fade it, which is information the early
+// picker paid for by committing first. Kickoff is not a late enough boundary to
+// fix that either: survivor takes one pick from anywhere on the slate, so a
+// Thursday result still informs a Sunday pick.
+//
+// So this reads as a record of what the pool did, not a live tote board. The
+// current week is usually empty, which is the point.
+//
+// Aggregate as well: it reports how many took a team, never who. Individual
+// picks stay behind the reveal rule in getWeekView. One caveat — in a very
+// small pool an aggregate is thin cover, since with two members a count of one
+// plus your own pick names the other person. That is inherent to counting.
+export async function getPickBoard({ poolId, userId, week }) {
+  const { pool } = await requireMembership(poolId, userId);
+  assertPickPool(pool);
+
+  const { rows } = await query(
+    `SELECT team, MAX(abbr) AS abbr, COUNT(*)::INT AS picks
+       FROM (
+         SELECT p.selected_team AS team,
+                CASE WHEN p.selected_team = g.home_team THEN g.home_team_abbr
+                     WHEN p.selected_team = g.away_team THEN g.away_team_abbr
+                END AS abbr
+           FROM picks p
+           JOIN games g ON g.id = p.game_id
+          WHERE p.pool_id = $1
+            AND g.league = $2 AND g.season = $3 AND g.week = $4
+            -- Concluded only. VOID counts alongside FINAL: the game is over
+            -- either way, and the pick can no longer be changed or acted on.
+            AND g.status IN ('FINAL', 'VOID')
+       ) picked
+      GROUP BY team
+      ORDER BY picks DESC, team`,
+    [poolId, pool.leagues[0], pool.season, week],
+  );
+
+  // How much of the week is still to come, so the UI can say "nothing yet"
+  // rather than "nobody picked".
+  const { rows: [progress] } = await query(
+    `SELECT COUNT(*)::INT AS games,
+            COUNT(*) FILTER (WHERE status IN ('FINAL', 'VOID'))::INT AS concluded
+       FROM games
+      WHERE league = $1 AND season = $2 AND week = $3`,
+    [pool.leagues[0], pool.season, week],
+  );
+
+  const total = rows.reduce((sum, row) => sum + row.picks, 0);
+  return {
+    week,
+    league: pool.leagues[0],
+    total_picks: total,
+    games: progress?.games ?? 0,
+    games_concluded: progress?.concluded ?? 0,
+    // Share of the field, so a row reads the same whether the pool has 8
+    // members or 800.
+    teams: rows.map((row) => ({
+      ...row,
+      share: total === 0 ? 0 : Number(((row.picks / total) * 100).toFixed(1)),
+    })),
+  };
 }

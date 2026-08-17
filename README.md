@@ -76,6 +76,20 @@ The same tool is available in the UI: open a pool and click **Simulate results**
 (or `POST /api/admin/simulate`) to finalize the current week, settle every wager,
 apply bust policies, and bust the leaderboard cache.
 
+## Play a whole season
+
+```bash
+./scripts/season-test.sh            # 18 weeks in about 7 minutes
+```
+
+Where the smoke test proves each rule against a single fabricated week, this
+plays a full season against `mock-espn/` and checks that they hold together:
+lines posted, bets placed and locked at kickoff, scores ingested, wagers graded,
+payouts written, stipends granted, members bust, survivors eliminated, and a
+leaderboard that still reconciles to the ledger at the end. It runs in its own
+compose project on its own ports, so it does not disturb the stack you are
+working in. See [docs/mock-season.md](docs/mock-season.md).
+
 ## Services
 
 | Service | Port | Role |
@@ -94,12 +108,18 @@ not collide with local installs.
 ## Common commands
 
 ```bash
+./scripts/compose.sh rebuild web     # after editing web/public/*
+./scripts/compose.sh rebuild         # rebuild and restart everything
 docker compose logs -f api worker    # follow application logs
 docker compose down                  # stop, keeping data
 docker compose down -v               # stop and wipe the database
-docker compose up -d --build         # rebuild after code changes
 psql postgres://leaguepicks:leaguepicks@localhost:5433/leaguepicks
 ```
+
+The client is baked into the `web` image rather than mounted, so an edit under
+`web/public/` is invisible until that image is rebuilt — and a plain restart
+serves the old bundle while reporting success. `rebuild` is the shorthand;
+add `--no-cache` to ignore the layer cache entirely.
 
 The bootstrap SQL only runs when the volume is empty, so `down -v` is how you get
 a clean database — the schedule and lines are then re-pulled from the feeds.

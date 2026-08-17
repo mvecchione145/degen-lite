@@ -13,6 +13,30 @@ function generateInviteCode(length = 8) {
   return code;
 }
 
+// The first week of a season that has not finished — where a survivor member's
+// liability begins when they join.
+//
+// Recorded once, as a number. Comparing `joined_at` against kickoff times looks
+// equivalent and is not: kickoffs move, so a week already settled could change
+// who was answerable for it.
+async function firstUnfinishedWeek(client, league, season) {
+  const { rows } = await client.query(
+    `SELECT COALESCE(
+              (SELECT MIN(week) FROM (
+                 SELECT g.week
+                   FROM games g
+                  WHERE g.league = $1 AND g.season = $2
+                  GROUP BY g.week
+                 HAVING BOOL_OR(g.status NOT IN ('FINAL', 'VOID'))
+               ) unfinished),
+              (SELECT MAX(week) + 1 FROM games WHERE league = $1 AND season = $2),
+              1
+            )::INT AS week`,
+    [league, season],
+  );
+  return rows[0]?.week ?? 1;
+}
+
 export async function createPool({
   commissionerId, name, poolType, useSpreads, leagues, season,
   startingBalance, maxBet, minBet, bustPolicy, stipendAmount,
@@ -44,8 +68,10 @@ export async function createPool({
     if (!pool) throw conflict('Could not allocate an invite code, please retry');
 
     await client.query(
-      'INSERT INTO pool_members (pool_id, user_id) VALUES ($1, $2)',
-      [pool.id, commissionerId],
+      'INSERT INTO pool_members (pool_id, user_id, active_from_week) VALUES ($1, $2, $3)',
+      [pool.id, commissionerId, pool.pool_type === 'SURVIVOR'
+        ? await firstUnfinishedWeek(client, pool.leagues[0], pool.season)
+        : null],
     );
     await creditOpening(client, pool, commissionerId);
 
@@ -95,7 +121,19 @@ export async function joinPoolByCode(userId, inviteCode) {
 
     // Only a first join opens a balance, so rejoining stays idempotent and
     // cannot be used to mint another opening credit.
-    if (joined.length > 0) await creditOpening(client, pool, userId);
+    if (joined.length > 0) {
+      await creditOpening(client, pool, userId);
+
+      // Survivor holds a member answerable for every week from here on,
+      // including by not picking — so somebody arriving in week 9 must not
+      // inherit eight missed weeks.
+      if (pool.pool_type === 'SURVIVOR') {
+        await client.query(
+          'UPDATE pool_members SET active_from_week = $3 WHERE pool_id = $1 AND user_id = $2',
+          [pool.id, userId, await firstUnfinishedWeek(client, pool.leagues[0], pool.season)],
+        );
+      }
+    }
 
     return pool;
   });
@@ -103,7 +141,7 @@ export async function joinPoolByCode(userId, inviteCode) {
 
 export async function listPoolsForUser(userId) {
   const { rows } = await query(
-    `SELECT p.*, u.username AS commissioner_username,
+    `SELECT p.*, COALESCE(u.display_name, u.username) AS commissioner_username,
             pm.is_eliminated, pm.eliminated_week,
             (SELECT COUNT(*)::INT FROM pool_members m WHERE m.pool_id = p.id) AS member_count,
             COALESCE((SELECT SUM(amount) FROM ledger_entries le
@@ -122,7 +160,7 @@ export async function listPoolsForUser(userId) {
 export async function getPoolWithMembership(poolId, userId, client = null) {
   const runner = client ?? { query };
   const { rows } = await runner.query(
-    `SELECT p.*, u.username AS commissioner_username,
+    `SELECT p.*, COALESCE(u.display_name, u.username) AS commissioner_username,
             pm.user_id AS member_user_id, pm.is_eliminated, pm.eliminated_week,
             pm.withdrawn_at
        FROM pools p
@@ -168,9 +206,10 @@ export async function requireMembership(poolId, userId, client = null) {
 
 export async function listMembers(poolId) {
   const { rows } = await query(
-    `SELECT u.id, u.username, u.avatar_emoji,
+    `SELECT u.id, COALESCE(u.display_name, u.username) AS username,
+            u.username AS account_username, u.avatar_emoji,
             pm.joined_at, pm.is_eliminated, pm.eliminated_week,
-            pm.withdrawn_at
+            pm.rebuys_used, pm.withdrawn_at
        FROM pool_members pm
        JOIN users u ON u.id = pm.user_id
       WHERE pm.pool_id = $1
@@ -292,11 +331,79 @@ export async function reinstateMember({ poolId, actorId, targetUserId, reason })
 // they would bury the handful of entries a commissioner actually needs to see.
 // OPENING and REBUY are the discretionary ones — someone joining, and someone
 // buying back in after going bust.
+// Buys an eliminated member back into a survivor pool.
+//
+// Deliberately a commissioner action rather than a button the member presses.
+// In a wager pool a rebuy is self-serve because the ledger settles it — you are
+// bust, you take a fresh balance, and the cost is visible in total credited.
+// Survival has no such price: pressing a button to undo your own elimination is
+// just taking the loss back. Putting it in the commissioner's hands makes it a
+// decision somebody made, and the pool log records who and why.
+//
+// Bounded by the pool's rebuy limit and counted the same way as the wager
+// version, so `rebuys_used` means one thing across both formats.
+export async function rebuyMember({ poolId, actorId, targetUserId, reason }) {
+  return withTransaction(async (client) => {
+    const { pool } = await requireCommissioner(poolId, actorId, client);
+
+    if (pool.bust_policy !== 'REBUY') {
+      throw badRequest('This pool does not allow rebuys');
+    }
+
+    const { rows: [member] } = await client.query(
+      `SELECT is_eliminated, eliminated_week, rebuys_used, withdrawn_at
+         FROM pool_members
+        WHERE pool_id = $1 AND user_id = $2
+        FOR UPDATE`,
+      [poolId, targetUserId],
+    );
+    if (!member) throw badRequest('That user is not a member of this pool');
+    if (member.withdrawn_at) {
+      throw badRequest('That member was removed from the pool. Add them back first.');
+    }
+    if (!member.is_eliminated) throw badRequest('That member is still alive');
+    if (member.rebuys_used >= pool.rebuy_limit) {
+      throw conflict(
+        `That member has used all ${pool.rebuy_limit} `
+        + `rebuy${pool.rebuy_limit === 1 ? '' : 's'} for this season`,
+      );
+    }
+
+    // Granting a rebuy is only a counter. Standing is derived from it —
+    // alive while rebuys cover losses — so settlement recomputes the flags on
+    // its next pass and the two cannot drift apart. Clearing them here as well
+    // just means the member does not have to wait a minute to see it.
+    await client.query(
+      `UPDATE pool_members
+          SET rebuys_used = rebuys_used + 1,
+              is_eliminated = FALSE,
+              eliminated_week = NULL
+        WHERE pool_id = $1 AND user_id = $2`,
+      [poolId, targetUserId],
+    );
+
+    const { rows: [event] } = await client.query(
+      `INSERT INTO pool_events (pool_id, actor_id, kind, target_user_id, reason)
+       VALUES ($1, $2, 'MEMBER_REBOUGHT', $3, $4)
+       RETURNING *`,
+      [poolId, actorId, targetUserId, reason ?? null],
+    );
+
+    await cacheDel(leaderboardKey(poolId));
+    return {
+      rebought: targetUserId,
+      rebuys_used: member.rebuys_used + 1,
+      rebuy_limit: pool.rebuy_limit,
+      event,
+    };
+  });
+}
+
 export async function listPoolEvents(poolId, limit = 50) {
   const { rows } = await query(
     `SELECT e.id, e.kind, e.reason, e.created_at,
-            actor.username AS actor_username,
-            target.username AS target_username,
+            COALESCE(actor.display_name, actor.username) AS actor_username,
+            COALESCE(target.display_name, target.username) AS target_username,
             e.bet_id, b.market, b.selection, b.line, b.stake::NUMERIC AS stake,
             g.home_team, g.away_team,
             NULL::NUMERIC AS amount
@@ -314,7 +421,7 @@ export async function listPoolEvents(poolId, limit = 50) {
       SELECT le.id,
              CASE le.entry_type WHEN 'OPENING' THEN 'BUY_IN' ELSE 'REBUY' END,
              NULL, le.created_at,
-             NULL, u.username,
+             NULL, COALESCE(u.display_name, u.username),
              NULL, NULL, NULL, NULL, NULL,
              NULL, NULL,
              le.amount::NUMERIC

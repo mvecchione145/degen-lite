@@ -7,10 +7,21 @@ import { config } from '../config.js';
 // member can be handed balance they did not win, and without that column someone
 // who rebought three times would outrank someone who never did on the same
 // results.
+// `account_email` backs the tooltip on a standings row. A display name is free
+// text and need not be unique, so when two rows both read "Mike" this is what
+// tells them apart — an email is unique by schema, which is what makes it
+// enough on its own.
+//
+// Worth being explicit about what this discloses: every member of a pool can
+// now see every other member's email. Pools are invite-only, so that is a group
+// who already know each other — but it is a widening, the payload is
+// Redis-cached, and any member can read it straight from the API rather than
+// only on hover. Dropping this one column is the whole of undoing it.
 async function wagerStandings(pool) {
   const { rows } = await query(
     `SELECT u.id AS user_id,
-            u.username,
+            COALESCE(u.display_name, u.username) AS username,
+            u.email AS account_email,
             u.avatar_emoji,
             pm.is_eliminated,
             pm.eliminated_week,
@@ -90,7 +101,8 @@ async function wagerStandings(pool) {
 async function pickStandings(pool) {
   const { rows } = await query(
     `SELECT u.id AS user_id,
-            u.username,
+            COALESCE(u.display_name, u.username) AS username,
+            u.email AS account_email,
             u.avatar_emoji,
             pm.is_eliminated,
             pm.eliminated_week,
@@ -111,7 +123,8 @@ async function pickStandings(pool) {
        LEFT JOIN picks p ON p.pool_id = pm.pool_id AND p.user_id = pm.user_id
       WHERE pm.pool_id = $1
         AND pm.withdrawn_at IS NULL
-      GROUP BY u.id, u.username, u.avatar_emoji, pm.is_eliminated, pm.eliminated_week`,
+      GROUP BY u.id, u.username, u.display_name, u.email, u.avatar_emoji,
+               pm.is_eliminated, pm.eliminated_week`,
     [pool.id, pool.pool_type],
   );
 

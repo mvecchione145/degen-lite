@@ -495,3 +495,24 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .game-meta .fixture { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
   .market-btn { padding: 8px; }
 }
+
+/* A standings name carries the account behind it as a tooltip; the cursor is
+   the only hint that hovering does anything. */
+.named { cursor: help; }
+
+/* Format picker in the create-pool form. Reuses the tab look, but these choose
+   what is being created rather than which panel is open. */
+.mode-tabs { margin-bottom: 0; }
+.mode-tabs button { flex: 0 1 auto; }
+
+/* Pick board: how the survivor field is spread across the week's teams. The
+   bar is proportional to the most-backed team, so the shape reads at a glance
+   rather than needing the numbers compared. */
+.pick-bar {
+  display: block;
+  height: 8px;
+  min-width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: .75;
+}
