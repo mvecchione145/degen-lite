@@ -210,7 +210,8 @@ CREATE TABLE pool_events (
     pool_id UUID NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
     actor_id UUID NOT NULL REFERENCES users(id),
     kind VARCHAR(30) NOT NULL
-        CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED', 'BET_VOIDED')),
+        CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED',
+                        'MEMBER_REBOUGHT', 'BET_VOIDED')),
     target_user_id UUID REFERENCES users(id),
     bet_id UUID REFERENCES bets(id),
     reason TEXT,

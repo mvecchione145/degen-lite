@@ -171,7 +171,7 @@ export async function listMembers(poolId) {
     `SELECT u.id, COALESCE(u.display_name, u.username) AS username,
             u.username AS account_username, u.avatar_emoji,
             pm.joined_at, pm.is_eliminated, pm.eliminated_week,
-            pm.withdrawn_at
+            pm.rebuys_used, pm.withdrawn_at
        FROM pool_members pm
        JOIN users u ON u.id = pm.user_id
       WHERE pm.pool_id = $1
@@ -293,6 +293,70 @@ export async function reinstateMember({ poolId, actorId, targetUserId, reason })
 // they would bury the handful of entries a commissioner actually needs to see.
 // OPENING and REBUY are the discretionary ones — someone joining, and someone
 // buying back in after going bust.
+// Buys an eliminated member back into a survivor pool.
+//
+// Deliberately a commissioner action rather than a button the member presses.
+// In a wager pool a rebuy is self-serve because the ledger settles it — you are
+// bust, you take a fresh balance, and the cost is visible in total credited.
+// Survival has no such price: pressing a button to undo your own elimination is
+// just taking the loss back. Putting it in the commissioner's hands makes it a
+// decision somebody made, and the pool log records who and why.
+//
+// Bounded by the pool's rebuy limit and counted the same way as the wager
+// version, so `rebuys_used` means one thing across both formats.
+export async function rebuyMember({ poolId, actorId, targetUserId, reason }) {
+  return withTransaction(async (client) => {
+    const { pool } = await requireCommissioner(poolId, actorId, client);
+
+    if (pool.bust_policy !== 'REBUY') {
+      throw badRequest('This pool does not allow rebuys');
+    }
+
+    const { rows: [member] } = await client.query(
+      `SELECT is_eliminated, eliminated_week, rebuys_used, withdrawn_at
+         FROM pool_members
+        WHERE pool_id = $1 AND user_id = $2
+        FOR UPDATE`,
+      [poolId, targetUserId],
+    );
+    if (!member) throw badRequest('That user is not a member of this pool');
+    if (member.withdrawn_at) {
+      throw badRequest('That member was removed from the pool. Add them back first.');
+    }
+    if (!member.is_eliminated) throw badRequest('That member is still alive');
+    if (member.rebuys_used >= pool.rebuy_limit) {
+      throw conflict(
+        `That member has used all ${pool.rebuy_limit} `
+        + `rebuy${pool.rebuy_limit === 1 ? '' : 's'} for this season`,
+      );
+    }
+
+    await client.query(
+      `UPDATE pool_members
+          SET is_eliminated = FALSE,
+              eliminated_week = NULL,
+              rebuys_used = rebuys_used + 1
+        WHERE pool_id = $1 AND user_id = $2`,
+      [poolId, targetUserId],
+    );
+
+    const { rows: [event] } = await client.query(
+      `INSERT INTO pool_events (pool_id, actor_id, kind, target_user_id, reason)
+       VALUES ($1, $2, 'MEMBER_REBOUGHT', $3, $4)
+       RETURNING *`,
+      [poolId, actorId, targetUserId, reason ?? null],
+    );
+
+    await cacheDel(leaderboardKey(poolId));
+    return {
+      rebought: targetUserId,
+      rebuys_used: member.rebuys_used + 1,
+      rebuy_limit: pool.rebuy_limit,
+      event,
+    };
+  });
+}
+
 export async function listPoolEvents(poolId, limit = 50) {
   const { rows } = await query(
     `SELECT e.id, e.kind, e.reason, e.created_at,

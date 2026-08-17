@@ -370,6 +370,42 @@ function poolBadges(pool) {
     ${pool.use_spreads && !isWagerPool(pool) ? '<span class="badge grey">Against the spread</span>' : ''}`;
 }
 
+// The formats a pool can be created in. Spread Sharks and Survivor are always
+// offered; Pick'em and Confidence only when the instance re-enables them, which
+// is the same split the API applies — the tab strip is not what authorises a
+// format, it just stops offering one that would be refused.
+//
+// `wagers` decides whether the balance and bet-cap settings mean anything: a
+// survivor pool has no stake, so showing a starting balance on it would invite
+// a number that is never used.
+const POOL_FORMATS = [
+  {
+    value: 'SPREAD_SHARKS',
+    label: 'Spread Sharks',
+    wagers: true,
+    busts: true,
+    bustBlurb: 'Busting is running your balance below the minimum bet with nothing pending.',
+    blurb: 'Everyone holds a balance and stakes it on spreads and totals at −110. '
+      + 'Standing is measured by balance.',
+  },
+  {
+    value: 'SURVIVOR',
+    label: 'Survivor',
+    wagers: false,
+    // NFL only: 32 teams you can hold in your head, one slate a week, and a
+    // no-reuse rule that costs something across 18 weeks. Never reusing one of
+    // college's 230-odd teams is no constraint at all.
+    leagues: ['NFL'],
+    busts: true,
+    bustBlurb: 'Busting is a wrong pick. A rebuy is granted by the commissioner, not taken '
+      + 'by the member — undoing your own elimination would just be taking the loss back.',
+    blurb: 'One team to win outright each week. A team cannot be used twice, and '
+      + 'a wrong pick puts you out for the season.',
+  },
+  { value: 'PICKEM', busts: false, label: "Pick'em", wagers: false, legacy: true, blurb: 'Legacy format: one pick per game, a point for each correct.' },
+  { value: 'CONFIDENCE', busts: false, label: 'Confidence', wagers: false, legacy: true, blurb: 'Legacy format: rank your picks, and score the rank when one lands.' },
+];
+
 async function renderPools() {
   // Every pool is invite-only, so there is nothing to browse — the only ways
   // in are creating one or being given a code.
@@ -425,16 +461,18 @@ async function renderPools() {
             <label for="pool-name">Pool name</label>
             <input id="pool-name" name="name" required minlength="3" placeholder="Sunday Sharks" />
           </div>
-          ${state.legacyModes ? `
-            <div class="field">
-              <label for="pool-type">Format</label>
-              <select id="pool-type" name="pool_type">
-                <option value="SPREAD_SHARKS">Spread Sharks (wagering)</option>
-                <option value="PICKEM">Pick'em (legacy)</option>
-                <option value="CONFIDENCE">Confidence (legacy)</option>
-                <option value="SURVIVOR">Survivor (legacy)</option>
-              </select>
-            </div>` : ''}
+          <div class="field">
+            <label>Format</label>
+            <div class="tabs mode-tabs" role="tablist">
+              ${POOL_FORMATS.filter((f) => !f.legacy || state.legacyModes).map((f) => `
+                <button type="button" role="tab" data-pool-type="${esc(f.value)}"
+                        aria-selected="${f.value === 'SPREAD_SHARKS'}">
+                  ${esc(f.label)}
+                </button>`).join('')}
+            </div>
+            <input type="hidden" name="pool_type" value="SPREAD_SHARKS" />
+            <p class="muted small" id="format-blurb" style="margin:8px 0 0"></p>
+          </div>
           <div class="field">
             <label for="pool-league">Leagues</label>
             <select id="pool-league" name="league">
@@ -442,11 +480,9 @@ async function renderPools() {
               <option value="NCAAF">NCAAF</option>
               <option value="NFL,NCAAF">BOTH</option>
             </select>
-            <p class="muted small" style="margin:6px 0 0">
-              A pool playing both keeps each league's own week numbering; the
-              board shows one at a time.
-            </p>
+            <p class="muted small" style="margin:6px 0 0" id="league-blurb"></p>
           </div>
+          <div id="wager-settings">
           <div class="field">
             <label for="starting-balance">Starting balance</label>
             <input id="starting-balance" name="starting_balance" type="number"
@@ -466,6 +502,8 @@ async function renderPools() {
               get their own allowance.
             </p>
           </div>
+          </div>
+          <div id="bust-settings">
           <div class="field">
             <label for="bust-policy">When a member busts</label>
             <select id="bust-policy" name="bust_policy">
@@ -473,6 +511,7 @@ async function renderPools() {
               <option value="TOPUP">Weekly top-up</option>
               <option value="REBUY">Allow rebuys</option>
             </select>
+            <p class="muted small" style="margin:6px 0 0" id="bust-blurb"></p>
           </div>
           <div class="field" id="stipend-field" hidden>
             <label for="stipend">Weekly stipend</label>
@@ -481,6 +520,7 @@ async function renderPools() {
           <div class="field" id="rebuy-field" hidden>
             <label for="rebuy-limit">Rebuys allowed per season</label>
             <input id="rebuy-limit" name="rebuy_limit" type="number" min="0" max="100" value="1" />
+          </div>
           </div>
           <button class="primary" type="submit">Create pool</button>
           <p class="error" id="create-error" hidden></p>
@@ -502,11 +542,71 @@ async function renderPools() {
   // Only present when the account may create pools; otherwise that card is
   // a notice and there is nothing to wire.
   if (form) {
+    const format = () => POOL_FORMATS.find((f) => f.value === form.pool_type.value)
+      ?? POOL_FORMATS[0];
+
     const syncSettings = () => {
-      form.querySelector('#stipend-field').hidden = policy.value !== 'TOPUP';
-      form.querySelector('#rebuy-field').hidden = policy.value !== 'REBUY';
-      form.querySelector('#cap-field').hidden = !capToggle.checked;
+      const chosen = format();
+      // A survivor pool has no stake, so the balance and cap settings are not
+      // merely irrelevant — leaving them on screen invites a number that is
+      // never read. `disabled` as well as hidden, so a required field inside
+      // cannot block submission from somewhere the member cannot see.
+      const wagerSettings = form.querySelector('#wager-settings');
+      wagerSettings.hidden = !chosen.wagers;
+      wagerSettings.querySelectorAll('input, select').forEach((el) => {
+        el.disabled = !chosen.wagers;
+      });
+
+      // Busting means different things per format, so the policy applies to
+      // both but not every option does. A weekly top-up hands out balance,
+      // which a survivor pool has none of — there is nothing to top up.
+      const bustSettings = form.querySelector('#bust-settings');
+      bustSettings.hidden = !chosen.busts;
+      bustSettings.querySelectorAll('input, select').forEach((el) => {
+        el.disabled = !chosen.busts;
+      });
+      const topup = policy.querySelector('option[value="TOPUP"]');
+      topup.hidden = !chosen.wagers;
+      topup.disabled = !chosen.wagers;
+      if (!chosen.wagers && policy.value === 'TOPUP') policy.value = 'ELIMINATE';
+      form.querySelector('#bust-blurb').textContent = chosen.bustBlurb ?? '';
+
+      form.querySelector('#format-blurb').textContent = chosen.blurb;
+
+      // A format may only play certain leagues. Rather than leave choices that
+      // the API would refuse, the ones that do not apply are removed and the
+      // control disappears when only one is left.
+      const league = form.querySelector('#pool-league');
+      const allowed = chosen.leagues ?? null;
+      [...league.options].forEach((opt) => {
+        opt.hidden = Boolean(allowed) && !opt.value.split(',').every((l) => allowed.includes(l));
+      });
+      if (allowed && !allowed.includes(league.value)) league.value = allowed[0];
+      const choices = [...league.options].filter((o) => !o.hidden);
+      league.closest('.field').hidden = choices.length < 2;
+      form.querySelector('#league-blurb').textContent = choices.length < 2 ? ''
+        : "A pool playing both keeps each league's own week numbering; the board"
+          + ' shows one at a time.';
+
+      if (chosen.busts) {
+        form.querySelector('#stipend-field').hidden = policy.value !== 'TOPUP';
+        form.querySelector('#rebuy-field').hidden = policy.value !== 'REBUY';
+      }
+      if (chosen.wagers) {
+        form.querySelector('#cap-field').hidden = !capToggle.checked;
+      }
     };
+
+    form.querySelectorAll('[data-pool-type]').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        form.pool_type.value = tab.dataset.poolType;
+        form.querySelectorAll('[data-pool-type]').forEach((t) => {
+          t.setAttribute('aria-selected', String(t === tab));
+        });
+        syncSettings();
+      });
+    });
+
     policy.addEventListener('change', syncSettings);
     capToggle.addEventListener('change', syncSettings);
     syncSettings();
@@ -516,16 +616,24 @@ async function renderPools() {
       const errorEl = app.querySelector('#create-error');
       errorEl.hidden = true;
       try {
+        const chosen = format();
         const body = {
           name: form.name.value,
-          pool_type: form.pool_type ? form.pool_type.value : 'SPREAD_SHARKS',
+          pool_type: form.pool_type.value,
           leagues: form.league.value.split(','),
-          starting_balance: Number(form.starting_balance.value),
-          // An unchecked cap sends null, which the API reads as "no limit".
-          max_bet: capToggle.checked ? Number(form.max_bet.value) : null,
-          bust_policy: policy.value,
-          ...(policy.value === 'TOPUP' ? { stipend_amount: Number(form.stipend_amount.value) } : {}),
-          ...(policy.value === 'REBUY' ? { rebuy_limit: Number(form.rebuy_limit.value) } : {}),
+          // Only a wagering pool carries these. Sending them on a survivor
+          // pool would store settings nothing reads, and they would then show
+          // in its header as if they governed something.
+          ...(chosen.wagers ? {
+            starting_balance: Number(form.starting_balance.value),
+            // An unchecked cap sends null, which the API reads as "no limit".
+            max_bet: capToggle.checked ? Number(form.max_bet.value) : null,
+          } : {}),
+          ...(chosen.busts ? {
+            bust_policy: policy.value,
+            ...(policy.value === 'TOPUP' ? { stipend_amount: Number(form.stipend_amount.value) } : {}),
+            ...(policy.value === 'REBUY' ? { rebuy_limit: Number(form.rebuy_limit.value) } : {}),
+          } : {}),
         };
         const { pool } = await api('/pools', { method: 'POST', body });
         toast(`Created ${pool.name} — invite code ${pool.invite_code}`);
@@ -859,6 +967,7 @@ function poolLog(events = []) {
     const what = {
       MEMBER_WITHDRAWN: () => `removed ${who}`,
       MEMBER_REINSTATED: () => `added ${who} back`,
+      MEMBER_REBOUGHT: () => `bought ${who} back in`,
       BET_VOIDED: () => `voided ${who}'s `
         + `${esc(e.away_team ?? '')} @ ${esc(e.home_team ?? '')} wager`
         + (e.stake != null ? ` (${fmtMoney(e.stake)})` : ''),
@@ -872,10 +981,20 @@ function poolLog(events = []) {
     </ul>`;
 }
 
-function manageMembers(members = [], commissionerId) {
+// Takes the pool rather than just the commissioner id, because what a
+// commissioner can do to a member depends on how the pool handles busting.
+function manageMembers(members = [], pool = {}) {
+  const commissionerId = pool.commissioner_id;
+  // Survivor rebuys are granted here rather than taken by the member: undoing
+  // your own elimination would just be taking the loss back.
+  const rebuysAllowed = pool.bust_policy === 'REBUY';
+
   const rows = members.map((m) => {
     const isBoss = m.id === commissionerId;
     const gone = Boolean(m.withdrawn_at);
+    const spent = m.rebuys_used ?? 0;
+    const canRebuy = rebuysAllowed && !gone && m.is_eliminated
+      && (pool.rebuy_limit == null || spent < pool.rebuy_limit);
     return `<tr${gone ? ' class="muted"' : ''}>
       <td>
         ${m.avatar_emoji ? `<span class="avatar">${esc(m.avatar_emoji)}</span>` : ''}
@@ -886,8 +1005,15 @@ function manageMembers(members = [], commissionerId) {
       </td>
       <td>${gone
     ? `<span class="badge grey">Removed ${new Date(m.withdrawn_at).toLocaleDateString()}</span>`
-    : m.is_eliminated ? '<span class="badge red">Bust</span>' : ''}</td>
-      <td style="text-align:right">${isBoss ? ''
+    : m.is_eliminated ? '<span class="badge red">Bust</span>' : ''}
+        ${rebuysAllowed && spent > 0
+    ? `<span class="badge grey">${spent}${pool.rebuy_limit == null ? '' : `/${pool.rebuy_limit}`} rebuy</span>`
+    : ''}</td>
+      <td style="text-align:right">
+        ${canRebuy
+    ? `<button data-rebuy="${esc(m.id)}"
+               data-username="${esc(m.username)}">Rebuy</button> ` : ''}
+        ${isBoss ? ''
     : gone
       ? `<button data-reinstate="${esc(m.id)}"
                  data-username="${esc(m.username)}">Add back</button>`
@@ -1420,7 +1546,7 @@ async function renderSharksPool(detail, week) {
           commissioner log, which every member can read.
         </p>
         <h3>Members</h3>
-        ${manageMembers(detail.members, pool.commissioner_id)}
+        ${manageMembers(detail.members, pool)}
         <h3>Live wagers</h3>
         <p class="muted small">
           Which side a member took stays hidden until their game kicks off — the
@@ -1550,6 +1676,15 @@ async function renderSharksPool(detail, week) {
         + 'They return with the balance and history they left with. No new '
         + 'opening balance is credited, and stipends for the weeks they were '
         + 'out are not back-paid.',
+      'Reason (optional) — shown to the pool:',
+    ));
+  });
+
+  app.querySelectorAll('[data-rebuy]').forEach((btn) => {
+    btn.addEventListener('click', () => commissionerAction(
+      `/pools/${poolId}/members/${btn.dataset.rebuy}/rebuy`,
+      `Buy ${btn.dataset.username} back in?\n\n`
+        + 'They return to the running, and it counts against their rebuy limit.',
       'Reason (optional) — shown to the pool:',
     ));
   });
@@ -1729,6 +1864,54 @@ function pickLeaderboard(leaderboard, poolType, currentUserId) {
     </p>`;
 }
 
+// Which teams the pool is on this week, most-backed first. The bar makes the
+// shape readable at a glance — in survivor, how lopsided the field is matters
+// more than any single number.
+function pickBoardTable(data) {
+  if (!data.teams.length) {
+    // Distinguish "the week has not been played" from "nobody entered it" —
+    // the first is the normal state of the current week and says nothing about
+    // participation.
+    return data.games_concluded === 0
+      ? `<p class="muted">
+           No game in week ${data.week} has finished yet. Picks appear here once
+           they do — showing them while the week is live would tell whoever has
+           not picked what everyone else did.
+         </p>`
+      : '<p class="muted">Nobody picked a team that has played this week.</p>';
+  }
+  const most = data.teams[0].picks;
+  return `
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Team</th>
+            <th class="num">Picks</th>
+            <th class="num">Share</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.teams.map((t) => `
+            <tr>
+              <td><strong>${esc(t.abbr || shortTeam(t.team, t.abbr))}</strong>
+                <span class="muted small">${esc(t.team)}</span></td>
+              <td class="num">${t.picks}</td>
+              <td class="num muted">${t.share}%</td>
+              <td style="width:40%">
+                <span class="pick-bar" style="width:${(t.picks / most) * 100}%"></span>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted small" style="margin:10px 0 0">
+      ${data.total_picks} pick${data.total_picks === 1 ? '' : 's'} across
+      ${data.games_concluded} of ${data.games} games played in week ${data.week}.
+    </p>`;
+}
+
 async function renderPickPool(detail, week) {
   const poolId = detail.pool.id;
   const [weekView, leaderboard] = await Promise.all([
@@ -1749,6 +1932,20 @@ async function renderPickPool(detail, week) {
       }
     }
   }
+
+  const isSurvivor = detail.pool.pool_type === 'SURVIVOR';
+
+  // state.tab is shared with the wager pools, whose tab names are different.
+  // Arriving here with one of theirs would hide every panel, so anything
+  // unrecognised falls back to the picks themselves.
+  const isCommish = Boolean(detail.is_commissioner);
+  const PICK_TABS = [
+    'picks',
+    ...(isSurvivor ? ['pickboard'] : []),
+    'leaderboard',
+    ...(isCommish ? ['manage'] : []),
+  ];
+  const tab = PICK_TABS.includes(state.tab) ? state.tab : 'picks';
 
   const openGames = weekView.games.filter((g) => !g.locked);
   const tiebreakerGameId = detail.pool.pool_type !== 'SURVIVOR' && openGames.length > 0
@@ -1826,7 +2023,7 @@ async function renderPickPool(detail, week) {
     </div>
     <div class="row" style="margin-bottom:20px;">
       ${poolBadges(detail.pool)}
-      <span class="badge grey">Legacy mode</span>
+      ${isSurvivor ? '' : '<span class="badge grey">Legacy mode</span>'}
       <span class="muted small">Season ${detail.pool.season} ·
         ${detail.members.length} members ·
         commissioner ${esc(detail.pool.commissioner_username)}</span>
@@ -1837,7 +2034,16 @@ async function renderPickPool(detail, week) {
          <strong>You were eliminated in week ${detail.membership.eliminatedWeek}.</strong>
        </div>` : ''}
 
-    <div class="card">
+    <div class="tabs">
+      <button data-view="picks" aria-selected="${tab === 'picks'}">Picks</button>
+      ${isSurvivor
+    ? `<button data-view="pickboard" aria-selected="${tab === 'pickboard'}">Pick board</button>` : ''}
+      <button data-view="leaderboard" aria-selected="${tab === 'leaderboard'}">Leaderboard</button>
+      ${isCommish
+    ? `<button data-view="manage" aria-selected="${tab === 'manage'}">Manage</button>` : ''}
+    </div>
+
+    <div class="card" data-panel="picks" ${tab === 'picks' ? '' : 'hidden'}>
       <div class="row-between" style="margin-bottom:12px;">
         <h2 style="margin:0">Week ${week} picks</h2>
         ${state.devTools ? '<button data-action="simulate">Simulate results</button>' : ''}
@@ -1850,12 +2056,115 @@ async function renderPickPool(detail, week) {
         </div>` : '<p class="muted small">Every game this week is locked.</p>'}
     </div>
 
-    <div class="card">
+    ${isSurvivor ? `
+      <div class="card" data-panel="pickboard" ${tab === 'pickboard' ? '' : 'hidden'}>
+        <div class="row-between" style="margin-bottom:4px;">
+          <h2 style="margin:0">Week ${week} pick board</h2>
+          <span class="muted small">How the pool spread, once played</span>
+        </div>
+        <p class="muted small" style="margin:0 0 12px">
+          Games that have finished, counts only. Nothing appears while a week is
+          still live: a running total would tell whoever has not picked yet what
+          the rest of the pool did.
+        </p>
+        <div id="pick-board"><p class="muted">Loading…</p></div>
+      </div>` : ''}
+
+    <div class="card" data-panel="leaderboard" ${tab === 'leaderboard' ? '' : 'hidden'}>
       <h2>Leaderboard</h2>
       ${pickLeaderboard(leaderboard, detail.pool.pool_type, state.user?.id)}
-    </div>`;
+    </div>
+
+    ${isCommish ? `
+      <div class="card" data-panel="manage" ${tab === 'manage' ? '' : 'hidden'}>
+        <h2>Manage pool</h2>
+        <p class="muted small">
+          ${detail.pool.bust_policy === 'REBUY'
+    ? `A member who is out can be bought back in, up to
+       ${detail.pool.rebuy_limit} time${detail.pool.rebuy_limit === 1 ? '' : 's'} each.
+       Removing a member and granting a rebuy are both recorded in the
+       commissioner log.`
+    : 'This pool eliminates a member on a wrong pick, and that is final. '
+      + 'Removing a member is recorded in the commissioner log.'}
+        </p>
+        <h3>Members</h3>
+        ${manageMembers(detail.members, detail.pool)}
+      </div>` : ''}`;
 
   paint();
+
+  // Fetched when the tab is opened rather than alongside the picks: most
+  // visits never look at it, and it has to be re-read after saving picks
+  // anyway, since your own pick is in the count.
+  async function loadPickBoard() {
+    const host = app.querySelector('#pick-board');
+    if (!host) return;
+    host.innerHTML = '<p class="muted">Loading…</p>';
+    try {
+      host.innerHTML = pickBoardTable(
+        await api(`/pools/${poolId}/pick-board?week=${week}`),
+      );
+    } catch (err) {
+      host.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+    }
+  }
+
+  app.querySelectorAll('[data-view]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.tab = btn.dataset.view;
+      app.querySelectorAll('[data-view]').forEach((b) => {
+        b.setAttribute('aria-selected', String(b.dataset.view === state.tab));
+      });
+      app.querySelectorAll('[data-panel]').forEach((panel) => {
+        panel.hidden = panel.dataset.panel !== state.tab;
+      });
+      if (state.tab === 'pickboard') loadPickBoard();
+    });
+  });
+
+  if (tab === 'pickboard') loadPickBoard();
+
+  // The same three commissioner actions the wager pools have. Each confirms,
+  // takes an optional reason, and lands in the log every member can read.
+  async function commissionerAction(path, confirmText, promptText) {
+    if (!window.confirm(confirmText)) return;
+    const reason = window.prompt(promptText, '');
+    if (reason === null) return;
+    try {
+      await api(path, { method: 'POST', body: { reason: reason.trim() || undefined } });
+      await render();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+
+  app.querySelectorAll('[data-rebuy]').forEach((btn) => {
+    btn.addEventListener('click', () => commissionerAction(
+      `/pools/${poolId}/members/${btn.dataset.rebuy}/rebuy`,
+      `Buy ${btn.dataset.username} back in?\n\n`
+        + 'They return to the running, and it counts against their rebuy limit.',
+      'Reason (optional) — shown to the pool:',
+    ));
+  });
+
+  app.querySelectorAll('[data-withdraw]').forEach((btn) => {
+    btn.addEventListener('click', () => commissionerAction(
+      `/pools/${poolId}/members/${btn.dataset.withdraw}/withdraw`,
+      `Remove ${btn.dataset.username} from this pool?\n\n`
+        + 'Their picks stay in the record. They will not be able to pick again, '
+        + 'and the invite code will not let them back in.',
+      'Reason (optional) — shown to the pool:',
+    ));
+  });
+
+  app.querySelectorAll('[data-reinstate]').forEach((btn) => {
+    btn.addEventListener('click', () => commissionerAction(
+      `/pools/${poolId}/members/${btn.dataset.reinstate}/reinstate`,
+      `Add ${btn.dataset.username} back to this pool?\n\n`
+        + 'They return with the picks and history they left with.',
+      'Reason (optional) — shown to the pool:',
+    ));
+  });
 
   wireWeekNav(detail.weeks, week, poolId, detail.league, (selected) => {
     location.hash = `#/pools/${poolId}/${selected}`;

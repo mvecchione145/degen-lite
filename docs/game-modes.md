@@ -1,9 +1,11 @@
 # Game Modes
 
-**Spread Sharks** is the platform's game mode. The three pick-based modes that
-preceded it — Pick'em, Confidence, and Survivor — remain in the codebase and
-existing pools of those types keep working, but they are not offered when
-creating a pool.
+**Spread Sharks** and **Survivor** are the two formats offered when creating a
+pool. Pick'em and Confidence remain in the codebase and existing pools of those
+types keep working, but they are not offered unless `LEGACY_POOL_MODES` says so.
+
+Survivor sits with the offered formats rather than the legacy ones because it
+needs no scoring rules of its own: the pick survives the week or it does not.
 
 ## Spread Sharks
 
@@ -121,6 +123,30 @@ only once the last outstanding bet has settled.
 
 ---
 
+## Survivor
+
+Users select exactly one team to win straight up each week. A team cannot be
+reused for the rest of the season, and an incorrect pick eliminates the member.
+
+**NFL only.** The format leans on a small, stable league: 32 teams, one slate a
+week, and a no-reuse rule that bites across 18 weeks. Never reusing one of
+college's 230-odd teams would be no constraint at all.
+
+**Busting** is a wrong pick. Elimination and rebuys both apply; a weekly top-up
+does not, since there is no balance to top up. A rebuy is **granted by the
+commissioner** rather than taken by the member — in a wager pool the ledger
+prices a rebuy and it shows in total credited, but survival has no such price,
+so pressing a button to undo your own elimination would just be taking the loss
+back. Each one counts against the pool's rebuy limit and lands in the
+commissioner log.
+
+**The pick board** shows how the pool spread across the week's teams, counting
+only games that have finished. A live count would tell whoever has not picked
+yet what everyone else did, which is information the early picker paid for by
+committing first. It reports how many took a team, never who.
+
+---
+
 ## Legacy modes
 
 These are retained and playable but no longer offered at pool creation. Set
@@ -137,18 +163,13 @@ Users pick winners for every game and assign a unique confidence rank — 1 thro
 16 for a 16-game week. A correct pick awards its assigned rank; ranks must be
 unique within a user's week.
 
-### Survivor / Elimination Pool
-
-Users select exactly one team to win straight up each week. A team cannot be
-reused for the rest of the season, and an incorrect pick eliminates the member.
-
 ### Legacy scoring and tiebreakers
 
 | Mode | Points for a correct pick |
 | --- | --- |
 | Pick'em (straight up or ATS) | 1 |
 | Confidence | The pick's `confidence_rank` |
-| Survivor | None — the pick determines survival |
+| Survivor (above, not legacy) | None — the pick determines survival |
 
 `picks.tiebreaker_points` stores a predicted total but is not used for ranking;
 standings break ties on points, then wins, then username.

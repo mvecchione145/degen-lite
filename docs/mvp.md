@@ -29,8 +29,10 @@ no pools at all, and generates no sports data.
 - **Reveal** — other members' bets stay hidden until a game kicks off
 - **Profile** — a display name and an emoji per account, shown together
   wherever the pool names a member, edited from the header
-- **Legacy modes** — Pick'em, Confidence, and Survivor pools remain fully
-  playable behind a flag
+- **Survivor** — one team to win outright each week, no team twice, a wrong
+  pick puts you out. NFL only, with a pick board showing how the pool spread
+  across teams once the games are played
+- **Legacy modes** — Pick'em and Confidence remain fully playable behind a flag
 
 ## Stack
 
@@ -160,6 +162,47 @@ standings is what makes the reveal rule worth having.
 hidden in the table — anyone can read the API. A member's own exposure is still
 their own to see and comes from `/pools/:id/balance`.
 
+## Survivor
+
+Offered at creation alongside Spread Sharks; Pick'em and Confidence stay behind
+`LEGACY_POOL_MODES`. Survivor needed no scoring rules of its own — the pick
+survives the week or it does not — which is why it sits with the offered formats
+rather than the legacy ones.
+
+**NFL only.** The format leans on a small, stable league: 32 teams you can hold
+in your head, one slate a week, and a no-reuse rule that means something across
+18 weeks. Never reusing one of college's 230-odd teams is no constraint at all,
+and a pool playing both leagues would have two slates a week to take a single
+pick from.
+
+**Busting** is a wrong pick. Elimination and rebuys both apply; a weekly top-up
+does not, since there is no balance to top up.
+
+**A rebuy is granted by the commissioner**, not taken by the member. In a wager
+pool a rebuy is self-serve because the ledger settles it — you are bust, you
+take a fresh balance, and the cost shows in total credited. Survival has no such
+price: pressing a button to undo your own elimination is just taking the loss
+back. `POST /pools/:id/members/:userId/rebuy` is commissioner-only, bounded by
+the pool's rebuy limit, and recorded in the commissioner log.
+
+### The pick board
+
+A tab on survivor pools showing how the pool spread across the week's teams,
+most-backed first.
+
+It counts **only games that have concluded**. A live count would hand whoever
+has not picked yet an advantage over the members who have — see the field
+100-deep on a team and you can fade it, which is information the early picker
+paid for by committing first. Kickoff is not a late enough boundary either:
+survivor takes one pick from anywhere on the slate, so a Thursday result still
+informs a Sunday pick. So the board reads as a record of what the pool did, and
+the current week is usually empty.
+
+It is aggregate besides — how many took a team, never who. Individual picks stay
+behind the same reveal rule the pick view uses. In a very small pool an
+aggregate is thin cover, since with two members a count of one plus your own
+pick names the other person; that is inherent to counting.
+
 ## Rules enforced in the application
 
 The schema cannot express these, so they live in `api/src/services/bets.js`:
@@ -229,6 +272,8 @@ points requires `Authorization: Bearer <token>`.
 | `GET` | `/pools/:id/pending` | Commissioner only. Live wagers, with the side withheld until kickoff |
 | `POST` | `/pools/:id/members/:userId/withdraw` | Commissioner only. `{reason?}` |
 | `POST` | `/pools/:id/members/:userId/reinstate` | Commissioner only. `{reason?}`. Undoes a withdrawal |
+| `POST` | `/pools/:id/members/:userId/rebuy` | Commissioner only. `{reason?}`. Buys an eliminated survivor member back in |
+| `GET` | `/pools/:id/pick-board?week=` | Survivor: teams picked and how many took each, finished games only |
 | `POST` | `/pools/:id/bets/:betId/void` | Commissioner only. `{reason?}`. Refunds the stake |
 | `GET` | `/pools/:id/bets?status=` | Bet history with a summary |
 | `GET` | `/pools/:id/balance` | Available, at risk, credited, net, bust state |

@@ -198,6 +198,38 @@ async function main() {
     (await call('/pools', {
       method: 'POST', token, body: { name: `Legacy ${suffix}`, pool_type: 'PICKEM' },
     })).status === 400);
+
+  // Survivor is offered alongside Spread Sharks, and is NFL only: 32 teams and
+  // one slate a week are what make a no-reuse rule bite.
+  const survivor = await call('/pools', {
+    method: 'POST',
+    token,
+    body: { name: `Survivor ${suffix}`, pool_type: 'SURVIVOR', bust_policy: 'REBUY', rebuy_limit: 1 },
+  });
+  check('a survivor pool is created without the legacy flag', survivor.status === 201,
+    JSON.stringify(survivor.data).slice(0, 140));
+  check('it carries its bust policy', survivor.data.pool?.bust_policy === 'REBUY'
+    && survivor.data.pool?.rebuy_limit === 1);
+  check('survivor is NFL only',
+    (await call('/pools', {
+      method: 'POST', token, body: { name: `SurvC ${suffix}`, pool_type: 'SURVIVOR', leagues: ['NCAAF'] },
+    })).status === 400);
+  check('a survivor pool cannot run a weekly top-up',
+    (await call('/pools', {
+      method: 'POST',
+      token,
+      body: { name: `SurvT ${suffix}`, pool_type: 'SURVIVOR', bust_policy: 'TOPUP', stipend_amount: 100 },
+    })).status === 400);
+  // The pick board counts finished games only, so a live week shows nothing —
+  // a running total would tell whoever has not picked what the rest did.
+  const freshBoardWeek = await call(
+    `/pools/${survivor.data.pool.id}/pick-board?week=${currentWeek}`, { token },
+  );
+  check('the pick board is empty while the week is live',
+    freshBoardWeek.status === 200 && freshBoardWeek.data.teams.length === 0,
+    JSON.stringify(freshBoardWeek.data).slice(0, 120));
+  check('a wager pool has no pick board',
+    (await call(`/pools/${poolId}/pick-board?week=${currentWeek}`, { token })).status === 400);
   check('a top-up pool without a stipend is refused',
     (await call('/pools', {
       method: 'POST', token, body: { name: `T ${suffix}`, bust_policy: 'TOPUP' },

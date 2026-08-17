@@ -51,10 +51,10 @@ report() {
       SELECT 1 FROM information_schema.tables WHERE table_name = 'pool_events'
     ) THEN 'present' ELSE 'MISSING' END
     UNION ALL
-    SELECT 'pool_events reinstate kind: ' || CASE WHEN EXISTS (
+    SELECT 'pool_events rebuy kind    : ' || CASE WHEN EXISTS (
       SELECT 1 FROM pg_constraint
        WHERE conname = 'pool_events_kind_check'
-         AND pg_get_constraintdef(oid) LIKE '%MEMBER_REINSTATED%'
+         AND pg_get_constraintdef(oid) LIKE '%MEMBER_REBOUGHT%'
     ) THEN 'present' ELSE 'MISSING' END
     UNION ALL
     SELECT 'users.avatar_emoji        : ' || CASE WHEN EXISTS (
@@ -107,7 +107,8 @@ CREATE INDEX IF NOT EXISTS pool_events_pool_idx
 -- no in-place form.
 ALTER TABLE pool_events DROP CONSTRAINT IF EXISTS pool_events_kind_check;
 ALTER TABLE pool_events ADD CONSTRAINT pool_events_kind_check
-    CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED', 'BET_VOIDED'));
+    CHECK (kind IN ('MEMBER_WITHDRAWN', 'MEMBER_REINSTATED',
+                        'MEMBER_REBOUGHT', 'BET_VOIDED'));
 
 -- One emoji beside the name on leaderboards, and the name shown beside it.
 ALTER TABLE users
