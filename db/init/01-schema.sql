@@ -205,8 +205,6 @@ CREATE TABLE picks (
     UNIQUE (pool_id, user_id, game_id)
 );
 
--- Every board read is (league, season, week); a season/week index would make
--- two leagues share a scan and then filter half of it away.
 -- Commissioner actions, shown to the pool. The commissioner is always also a
 -- player, so a removal or a void is a competitor acting on a rival; recording it
 -- where everyone can see is what keeps that from being a trust problem.
@@ -230,6 +228,8 @@ CREATE TABLE pool_events (
 CREATE INDEX pool_events_pool_idx ON pool_events (pool_id, created_at DESC);
 
 
+-- Every board read is (league, season, week); a season/week index would make
+-- two leagues share a scan and then filter half of it away.
 CREATE INDEX games_league_season_week_idx ON games (league, season, week);
 CREATE INDEX games_kickoff_idx ON games (kickoff_time);
 CREATE INDEX games_status_idx ON games (status);
