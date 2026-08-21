@@ -143,7 +143,12 @@ export async function listPoolsForUser(userId) {
   const { rows } = await query(
     `SELECT p.*, COALESCE(u.display_name, u.username) AS commissioner_username,
             pm.is_eliminated, pm.eliminated_week,
-            (SELECT COUNT(*)::INT FROM pool_members m WHERE m.pool_id = p.id) AS member_count,
+            -- Withdrawn members are excluded, because this number is read
+            -- against the leaderboard: wagerStandings and pickStandings both
+            -- filter on withdrawn_at, so counting everyone here put "8 members"
+            -- on a pool card above a table listing 7.
+            (SELECT COUNT(*)::INT FROM pool_members m
+              WHERE m.pool_id = p.id AND m.withdrawn_at IS NULL) AS member_count,
             COALESCE((SELECT SUM(amount) FROM ledger_entries le
                        WHERE le.pool_id = p.id AND le.user_id = $1), 0)::NUMERIC AS balance
        FROM pools p

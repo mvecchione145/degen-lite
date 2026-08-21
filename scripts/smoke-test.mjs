@@ -793,6 +793,17 @@ async function main() {
   check('a removed member drops out of the standings',
     !(await call(`/pools/${cId}/leaderboard`, { token })).data.standings
       .some((r) => r.user_id === memberId));
+
+  // The pool card's count and the leaderboard it sits above are read together,
+  // so they have to describe the same population. Counting every membership row
+  // put "8 members" over a table listing 7.
+  const listedPool = (await call('/pools', { token })).data.pools
+    .find((p) => p.id === cId);
+  const standingsAfter = (await call(`/pools/${cId}/leaderboard`, { token }))
+    .data.standings;
+  check('the member count matches the standings it is shown beside',
+    listedPool.member_count === standingsAfter.length,
+    `card ${listedPool?.member_count}, standings ${standingsAfter.length}`);
   check('a removed member keeps read access',
     (await call(`/pools/${cId}`, { token: memberToken })).ok);
   check('a removed member can place no further wagers',
